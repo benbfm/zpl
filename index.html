@@ -3,19 +3,160 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-<title>ZPL Preview</title>
+<title>ZPL / LBL Preview</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
     font-family: 'Segoe UI', sans-serif;
     background: #f4f6f9;
+    min-height: 100vh;
+    padding: 14px;
     display: flex;
     flex-direction: column;
     align-items: center;
-    justify-content: center;
-    min-height: 100vh;
-    padding: 16px;
+    gap: 10px;
   }
+
+  /* ── Toolbar ── */
+  .bar {
+    background: #fff;
+    border-radius: 10px;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.08);
+    padding: 9px 14px;
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+    width: 100%;
+    max-width: 560px;
+  }
+  .tb-title {
+    font-size: 12px;
+    font-weight: 700;
+    color: #1a3a5c;
+    letter-spacing: .03em;
+  }
+  .tb-group {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+  }
+  .bar label {
+    font-size: 10px;
+    font-weight: 700;
+    color: #9ca3af;
+    text-transform: uppercase;
+    letter-spacing: .07em;
+    white-space: nowrap;
+  }
+  .bar input[type=number] {
+    width: 52px;
+    padding: 4px 6px;
+    border: 1.5px solid #d1d5db;
+    border-radius: 6px;
+    font-size: 12px;
+    font-family: inherit;
+    color: #1a1a2e;
+    text-align: center;
+  }
+  .bar input[type=number]:focus { outline: none; border-color: #1a3a5c; }
+  .bar select {
+    padding: 4px 7px;
+    border: 1.5px solid #d1d5db;
+    border-radius: 6px;
+    font-size: 12px;
+    font-family: inherit;
+    color: #1a1a2e;
+    background: #fff;
+    max-width: 140px;
+  }
+  .bar select:focus { outline: none; border-color: #1a3a5c; }
+  .unit { font-size: 10px; color: #9ca3af; }
+  .divider { width: 1px; height: 20px; background: #e5e7eb; flex-shrink: 0; }
+
+  /* ── Action bar ── */
+  .action-bar {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  .btn {
+    padding: 7px 14px;
+    border-radius: 7px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    border: 1.5px solid #d1d5db;
+    background: #fff;
+    color: #374151;
+    font-family: inherit;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    white-space: nowrap;
+  }
+  .btn:hover { background: #f1f5f9; border-color: #9ca3af; }
+  .btn.active { background: #1a3a5c; color: #fff; border-color: #1a3a5c; }
+  .btn.primary { background: #1a3a5c; color: #fff; border-color: #1a3a5c; }
+  .btn.primary:hover { background: #0f2540; }
+
+  /* Hidden file input */
+  #fileInput { display: none; }
+
+  /* ── ZPL Editor panel ── */
+  #editor-panel {
+    display: none;
+    width: 100%;
+    max-width: 560px;
+    background: #fff;
+    border-radius: 10px;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.08);
+    overflow: hidden;
+  }
+  #editor-panel.open { display: block; }
+  .editor-header {
+    background: #1a3a5c;
+    color: #fff;
+    padding: 8px 14px;
+    font-size: 11px;
+    font-weight: 700;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .editor-header .file-info {
+    font-weight: 400;
+    opacity: .75;
+    font-size: 10px;
+    max-width: 260px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  #zplEditor {
+    width: 100%;
+    height: 160px;
+    padding: 10px 12px;
+    font-family: 'Cascadia Code', 'Consolas', monospace;
+    font-size: 11px;
+    line-height: 1.6;
+    border: none;
+    resize: vertical;
+    color: #1a1a2e;
+    background: #0f172a;
+    color: #7dd3fc;
+    outline: none;
+  }
+  .editor-footer {
+    padding: 8px 12px;
+    display: flex;
+    gap: 8px;
+    border-top: 1px solid #e5e7eb;
+    background: #f8fafc;
+  }
+
+  /* ── Label canvas ── */
   #label-wrap {
     background: #fff;
     border-radius: 10px;
@@ -25,265 +166,744 @@
   }
   #label-surface {
     position: relative;
-    background: #ffffff;
+    background: #fff;
     border: 1px solid #e5e7eb;
     overflow: hidden;
   }
-  .msg {
-    color: #6b7280;
-    font-size: 13px;
-    padding: 40px 24px;
-    text-align: center;
-  }
+
+  /* ── Size hint ── */
+  #size-hint { font-size: 10px; color: #9ca3af; text-align: center; }
+
+  /* ── Drop zone ── */
+  body.dragover #label-wrap { outline: 3px dashed #1a3a5c; }
+
+  .msg { color: #6b7280; font-size: 13px; padding: 40px 24px; text-align: center; }
   .error-box {
-    background: #fef2f2;
-    border: 1px solid #fecaca;
-    border-radius: 8px;
-    padding: 16px 20px;
-    color: #dc2626;
-    font-size: 13px;
-    max-width: 340px;
-    text-align: center;
-    word-break: break-word;
+    background: #fef2f2; border: 1px solid #fecaca; border-radius: 8px;
+    padding: 14px 18px; color: #dc2626; font-size: 12px;
+    max-width: 340px; text-align: center; word-break: break-word;
   }
-  /* QR code img auto-size fix */
   #label-surface img { display: block; }
 </style>
 </head>
 <body>
 
-<div id="label-wrap">
-  <div id="label-surface">
-    <div class="msg">Rendering…</div>
+<!-- ── Toolbar row 1: dimensions ── -->
+<div class="bar">
+  <span class="tb-title">🏷 ZPL / LBL Preview</span>
+  <div class="divider"></div>
+
+  <div class="tb-group">
+    <label>Width</label>
+    <input type="number" id="inWidth" min="1" max="12" step="0.5" value="4"/>
+    <span class="unit">in</span>
+  </div>
+
+  <div class="tb-group">
+    <label>Height</label>
+    <input type="number" id="inHeight" min="1" max="18" step="0.5" value="6"/>
+    <span class="unit">in</span>
+  </div>
+
+  <div class="tb-group">
+    <label>DPI</label>
+    <select id="inDPI">
+      <option value="6">6 dpmm (152)</option>
+      <option value="8" selected>8 dpmm (203)</option>
+      <option value="12">12 dpmm (300)</option>
+      <option value="24">24 dpmm (600)</option>
+    </select>
+  </div>
+
+  <div class="divider"></div>
+
+  <div class="tb-group">
+    <label>Preset</label>
+    <select id="inPreset" onchange="applyPreset()">
+      <option value="">– custom –</option>
+      <option value="6|2|8">Battery Pack (6×2")</option>
+      <option value="4|3|8">Carton/Pallet (4×3")</option>
+      <option value="4|6|8">Standard (4×6")</option>
+      <option value="4|4|8">Square (4×4")</option>
+      <option value="2|1|8">Small (2×1")</option>
+    </select>
   </div>
 </div>
 
-<!-- JsBarcode: Code 128, Code 39, EAN, etc. -->
+<!-- ── Action bar ── -->
+<div class="action-bar">
+  <!-- File upload -->
+  <input type="file" id="fileInput" accept=".lbl,.zpl,.txt"/>
+  <button class="btn" onclick="document.getElementById('fileInput').click()">
+    📂 Open .lbl / .zpl file
+  </button>
+
+  <!-- Paste/Edit toggle -->
+  <button class="btn" id="btnEdit" onclick="toggleEditor()">
+    ✏️ Paste / Edit ZPL
+  </button>
+
+  <!-- Re-render -->
+  <button class="btn primary" onclick="renderFromEditor()">
+    ▶ Render
+  </button>
+</div>
+
+<!-- ── ZPL Editor panel ── -->
+<div id="editor-panel">
+  <div class="editor-header">
+    <span>ZPL / LBL Editor</span>
+    <span class="file-info" id="fileInfo">No file loaded — paste ZPL below</span>
+  </div>
+  <textarea id="zplEditor" spellcheck="false" placeholder="Paste your ZPL or LBL content here…&#10;&#10;Example:&#10;^XA&#10;^FO50,50^A0N,40,40^FDHello World^FS&#10;^XZ"></textarea>
+  <div class="editor-footer">
+    <button class="btn primary" style="flex:1;" onclick="renderFromEditor()">▶ Render</button>
+    <button class="btn" onclick="clearEditor()">🗑 Clear</button>
+  </div>
+</div>
+
+<!-- ── Label canvas ── -->
+<div id="label-wrap">
+  <div id="label-surface" style="width:360px;height:540px;">
+    <div class="msg">
+      Open a <strong>.lbl</strong> or <strong>.zpl</strong> file,<br/>
+      paste ZPL in the editor,<br/>
+      or pass <code>?zpl=</code> in the URL.
+    </div>
+  </div>
+</div>
+<div id="size-hint"></div>
+
+<!-- Libraries -->
 <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js"></script>
-<!-- QRCode.js -->
 <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
 
 <script>
 (function () {
 
-  /* ── Read URL params ─────────────────────────────────────────────────────── */
-  var params  = new URLSearchParams(window.location.search);
-  var zpl     = (params.get('zpl') || '').trim();
-  var dpi     = parseFloat(params.get('dpi') || '8') * 25.4;   // dpmm → dpi  (8dpmm ≈ 203dpi)
-  var labelW  = parseFloat(params.get('width')  || '4');        // inches
-  var labelH  = parseFloat(params.get('height') || '6');        // inches
-  var surface = document.getElementById('label-surface');
-  var wrap    = document.getElementById('label-wrap');
+  /* ── State ──────────────────────────────────────────────────────────────── */
+  var currentZPL = '';
+  var surface    = document.getElementById('label-surface');
+  var sizeHint   = document.getElementById('size-hint');
+  var editor     = document.getElementById('zplEditor');
 
-  /* ── Label dot dimensions ────────────────────────────────────────────────── */
-  var DOTS_W  = Math.round(labelW * dpi);   // e.g. 4 * 203 = 812
-  var DOTS_H  = Math.round(labelH * dpi);   // e.g. 6 * 203 = 1218
+  /* ── URL params ─────────────────────────────────────────────────────────── */
+  var params = new URLSearchParams(window.location.search);
+  var urlZPL = (params.get('zpl') || '').trim();
+  var urlW   = params.get('width')  || '4';
+  var urlH   = params.get('height') || '6';
+  var urlDPI = params.get('dpi')    || '8';
 
-  /* ── Display scale: fit inside 380px wide ────────────────────────────────── */
-  var DISP_W  = Math.min(380, window.innerWidth - 60);
-  var SCALE   = DISP_W / DOTS_W;
-  var DISP_H  = DOTS_H * SCALE;
+  document.getElementById('inWidth').value  = urlW;
+  document.getElementById('inHeight').value = urlH;
 
-  surface.style.width  = DISP_W + 'px';
-  surface.style.height = DISP_H + 'px';
-
-  /* ── Error / empty states ────────────────────────────────────────────────── */
-  function showError(msg) {
-    surface.innerHTML = '<div class="error-box">⚠️ ' + msg + '</div>';
-    surface.style.display = 'flex';
-    surface.style.alignItems = 'center';
-    surface.style.justifyContent = 'center';
+  var dpiSel = document.getElementById('inDPI');
+  for (var i = 0; i < dpiSel.options.length; i++) {
+    if (dpiSel.options[i].value === urlDPI) { dpiSel.selectedIndex = i; break; }
+  }
+  var presetKey = urlW + '|' + urlH + '|' + urlDPI;
+  var presetSel = document.getElementById('inPreset');
+  for (var j = 0; j < presetSel.options.length; j++) {
+    if (presetSel.options[j].value === presetKey) { presetSel.selectedIndex = j; break; }
   }
 
-  if (!zpl) {
-    showError('No ZPL provided.<br><small>Add ?zpl=^XA...^XZ to the URL.</small>');
-    return;
+  if (urlZPL) {
+    currentZPL     = urlZPL;
+    editor.value   = urlZPL;
+    document.getElementById('fileInfo').textContent = 'Loaded from URL parameter';
+    render();
   }
 
-  if (!zpl.includes('^XA') && !zpl.includes('^xa')) {
-    showError('Invalid ZPL — must start with ^XA and end with ^XZ.');
-    return;
+  /* ── File upload ─────────────────────────────────────────────────────────── */
+  document.getElementById('fileInput').addEventListener('change', function (e) {
+    var file = e.target.files[0];
+    if (!file) return;
+    var reader = new FileReader();
+    reader.onload = function (ev) {
+      loadZPL(ev.target.result, file.name);
+    };
+    reader.readAsText(file);
+    e.target.value = ''; // reset so same file can be re-opened
+  });
+
+  /* ── Drag-and-drop anywhere on page ─────────────────────────────────────── */
+  document.body.addEventListener('dragover', function (e) {
+    e.preventDefault();
+    document.body.classList.add('dragover');
+  });
+  document.body.addEventListener('dragleave', function () {
+    document.body.classList.remove('dragover');
+  });
+  document.body.addEventListener('drop', function (e) {
+    e.preventDefault();
+    document.body.classList.remove('dragover');
+    var file = e.dataTransfer.files[0];
+    if (!file) return;
+    var reader = new FileReader();
+    reader.onload = function (ev) { loadZPL(ev.target.result, file.name); };
+    reader.readAsText(file);
+  });
+
+  /* ── Load ZPL from file content ──────────────────────────────────────────── */
+  function loadZPL(content, filename) {
+    var cleaned = content.trim();
+
+    currentZPL   = cleaned;
+    editor.value = cleaned;
+    document.getElementById('fileInfo').textContent = filename || 'Loaded file';
+
+    var fmt = detectFormat(cleaned);
+
+    if (fmt === 'NICELABEL_BIN') {
+      // NiceLabel binary: detect printer DPI and pre-set label size
+      // ZM400 = 200 DPI, ZT410 = 203 DPI
+      var isZM400 = cleaned.includes('ZM400');
+      var dpiVal  = isZM400 ? '8' : '8';   // 200/203 DPI → 8 dpmm
+      document.getElementById('inWidth').value  = '6';
+      document.getElementById('inHeight').value = '2';
+      document.getElementById('inDPI').value    = dpiVal;
+      document.getElementById('inPreset').value = '';
+      // Don't open editor — binary is unreadable; editor will be replaced after render
+      render();
+      // Open editor AFTER render so user sees the generated ZPL
+      openEditor();
+      return;
+    }
+
+    // Auto-detect label size from ^PW (print width dots) and ^LL (label length dots)
+    var pwMatch = cleaned.match(/\^PW(\d+)/i);
+    var llMatch = cleaned.match(/\^LL(\d+)/i);
+    var dpmm    = parseFloat(document.getElementById('inDPI').value) || 8;
+    var dpi     = dpmm * 25.4;
+    if (pwMatch) {
+      var detectedW = (parseInt(pwMatch[1]) / dpi).toFixed(1);
+      document.getElementById('inWidth').value = detectedW;
+    }
+    if (llMatch) {
+      var detectedH = (parseInt(llMatch[1]) / dpi).toFixed(1);
+      document.getElementById('inHeight').value = detectedH;
+    }
+    if (pwMatch || llMatch) {
+      document.getElementById('inPreset').value = '';
+    }
+
+    // Open editor so user can see the code
+    openEditor();
+    render();
   }
 
-  /* ── Clear and render ────────────────────────────────────────────────────── */
-  surface.innerHTML = '';
-  surface.style.display = 'block';
-
-  /* ── ZPL tokeniser ───────────────────────────────────────────────────────── */
-  // Split on every ^ that starts a new command (keep the ^)
-  var raw = zpl.replace(/\r/g, '').replace(/\n/g, '');
-  // Separate ^FD...^FS blocks first (field data can contain anything)
-  // Strategy: walk char by char, collect commands
-  var tokens = [];
-  var i = 0;
-  while (i < raw.length) {
-    if (raw[i] === '^') {
-      var end = raw.indexOf('^', i + 1);
-      if (end === -1) end = raw.length;
-      tokens.push(raw.substring(i, end));
-      i = end;
+  /* ── Editor toggle ───────────────────────────────────────────────────────── */
+  function openEditor() {
+    document.getElementById('editor-panel').classList.add('open');
+    document.getElementById('btnEdit').classList.add('active');
+  }
+  window.toggleEditor = function () {
+    var panel = document.getElementById('editor-panel');
+    var btn   = document.getElementById('btnEdit');
+    if (panel.classList.contains('open')) {
+      panel.classList.remove('open');
+      btn.classList.remove('active');
     } else {
-      i++;
+      openEditor();
     }
+  };
+
+  window.clearEditor = function () {
+    editor.value = '';
+    currentZPL   = '';
+    document.getElementById('fileInfo').textContent = 'No file loaded — paste ZPL below';
+    surface.innerHTML = '<div class="msg">Cleared. Paste new ZPL above and click Render.</div>';
+    surface.style.display = 'block';
+  };
+
+  window.renderFromEditor = function () {
+    currentZPL = editor.value.trim();
+    render();
+  };
+
+  /* ── Preset ──────────────────────────────────────────────────────────────── */
+  window.applyPreset = function () {
+    var val = document.getElementById('inPreset').value;
+    if (!val) return;
+    var parts = val.split('|');
+    document.getElementById('inWidth').value  = parts[0];
+    document.getElementById('inHeight').value = parts[1];
+    for (var i = 0; i < dpiSel.options.length; i++) {
+      if (dpiSel.options[i].value === parts[2]) { dpiSel.selectedIndex = i; break; }
+    }
+    render();
+  };
+
+  /* ── Dimension controls ─────────────────────────────────────────────────── */
+  ['inWidth', 'inHeight', 'inDPI'].forEach(function (id) {
+    document.getElementById(id).addEventListener('change', function () {
+      document.getElementById('inPreset').value = '';
+      render();
+    });
+  });
+
+  /* ══════════════════════════════════════════════════════════════════════════
+     FORMAT DETECTION
+  ══════════════════════════════════════════════════════════════════════════ */
+  function detectFormat(content) {
+    var t = content.trim();
+    var u = t.toUpperCase();
+    if (u.includes('^XA'))                          return 'ZPL';
+    // NiceLabel binary OLE2 document (.lbl created by NiceLabel Designer)
+    if (t.includes('NICELbl') || t.includes('NicePower') || t.includes('NICELbl64'))
+                                                    return 'NICELABEL_BIN';
+    if (u.includes('<?XML') || u.includes('<LABEL') ||
+        u.includes('<NICEFORM') || u.includes('<NICELABEL')) return 'NICELABEL_XML';
+    // EPL2: lines start with N / A / B / P / q / Q / R / ZT
+    if (/^[NnPpRr]\s*$|^[Aqq]\d/m.test(t))         return 'EPL2';
+    // CPCL: starts with ! 0
+    if (t.startsWith('! 0'))                        return 'CPCL';
+    return 'UNKNOWN';
   }
 
-  /* ── Render state ────────────────────────────────────────────────────────── */
-  var curX = 0, curY = 0;
-  var fontH = 30, fontW = 30;
-  var barcodeNext = null;   // { type, height, showText }
-  var qrNext = null;        // { size }
+  /* ══════════════════════════════════════════════════════════════════════════
+     NICELABEL BINARY EXTRACTOR + RENDERER
+  ══════════════════════════════════════════════════════════════════════════ */
 
-  /* ── Helper: place an element absolutely ─────────────────────────────────── */
-  function place(el, x, y) {
-    el.style.position = 'absolute';
-    el.style.left     = (x * SCALE) + 'px';
-    el.style.top      = (y * SCALE) + 'px';
-    surface.appendChild(el);
-    return el;
-  }
-
-  /* ── Helper: parse comma-separated args after command code ───────────────── */
-  function args(tok, prefixLen) {
-    return tok.substring(prefixLen).split(',');
-  }
-
-  /* ── Process each token ──────────────────────────────────────────────────── */
-  tokens.forEach(function (tok) {
-    var upper = tok.toUpperCase();
-
-    /* Field Origin — sets current X, Y */
-    if (upper.startsWith('^FO')) {
-      var p = args(tok, 3);
-      curX = parseFloat(p[0]) || 0;
-      curY = parseFloat(p[1]) || 0;
-      return;
+  // Scan binary content for readable ASCII strings and classify them
+  function extractNiceLabelContent(raw) {
+    // Pull out all printable ASCII sequences of 3+ chars
+    var re = /[ -~]{3,}/g;
+    var match, allStrings = [];
+    while ((match = re.exec(raw)) !== null) {
+      var s = match[0].trim();
+      if (s.length >= 3) allStrings.push(s);
     }
 
-    /* Font — ^A0N,height,width  or  ^AN,height  etc. */
-    if (upper.match(/^\^A[0-9A-Z][NnBbRrLl]?,?/)) {
-      var stripped = tok.replace(/^\^A[0-9A-Za-z][NnBbRrLl]?,?/, '');
-      var p = stripped.split(',');
-      fontH = parseFloat(p[0]) || 30;
-      fontW = parseFloat(p[1] || p[0]) || fontH;
-      return;
-    }
+    // Deduplicate, keeping first occurrence
+    var seen = {}, unique = [];
+    allStrings.forEach(function(s) { if (!seen[s]) { seen[s]=true; unique.push(s); } });
 
-    /* Graphic Box — ^GBwidth,height,thickness */
-    if (upper.startsWith('^GB')) {
-      var p = args(tok, 3);
-      var gw = parseFloat(p[0]) || 1;
-      var gh = parseFloat(p[1]) || 1;
-      var gt = parseFloat(p[2]) || 1;
-      var el = document.createElement('div');
-      el.style.width      = (gw * SCALE) + 'px';
-      el.style.height     = (Math.max(gh, gt) * SCALE) + 'px';
-      el.style.background = '#000';
-      place(el, curX, curY);
-      return;
-    }
+    // Discard structural / tooling strings
+    var structural = /NICELbl|NicePower|ZebraDesigner|ZDesigner|winspool|Arial|obsolete|
+Root Entry|Contents|SummaryInformation|DocumentSummary|OcDocument|OEMData|V3 Data|
+V26 Data|V21|V31|V40|V41|V50|V51|V52|V53|V54|V60|V61|V32|V33|V36|RFID|Barcode.*Preferred|
+Marker Line|Barcode Mils|Barcode Codepage|Serial number|Integrations|NiceForm|
+Pick List|Unicode|Infoglyph|Maxi code|GuideLine|Epson support|Variable height|
+Australian|Intelligent mail|GS1|Rich Text|store.*recall|Date.*roll|USPS|Royal mail|
+ActiveX|Cutter support|Grouping|Double side|Multicolor|EPC|Stock func|comma.*separ|
+Major version|Improved|Implemented|Updated|supported|functionality|implemented|
+Merge graphics|sgpp555|NICELabel|date.*time|Diagonal|Electronic|Product Supervision|
+variable.*size|Variable.*size|Saving of compress|enhanced|added|changed|was implement/i;
 
-    /* Code 128 Barcode — ^BCN,height,showText,... */
-    if (upper.startsWith('^BC')) {
-      var stripped = tok.replace(/^\^BC[NnBbRrLl]?,?/i, '');
-      var p = stripped.split(',');
-      barcodeNext = {
-        type:     'CODE128',
-        height:   parseFloat(p[0]) || 100,
-        showText: (p[1] || 'Y').toUpperCase() !== 'N'
-      };
-      return;
-    }
+    var filtered = unique.filter(function(s) {
+      if (structural.test(s)) return false;
+      if (/^[=\+\/\*\-_\s#@%^&]{3,}$/.test(s)) return false; // symbol garbage
+      if (/^[0-9a-f]{8,}$/i.test(s)) return false; // hex blobs
+      if (s.length > 120) return false; // very long = binary artifact
+      return true;
+    });
 
-    /* Code 39 Barcode — ^B3 */
-    if (upper.startsWith('^B3')) {
-      var stripped = tok.replace(/^\^B3[NnBbRrLl]?,?/i, '');
-      var p = stripped.split(',');
-      barcodeNext = {
-        type:     'CODE39',
-        height:   parseFloat(p[1]) || 100,
-        showText: (p[2] || 'Y').toUpperCase() !== 'N'
-      };
-      return;
-    }
+    // Identify key label fields by pattern matching
+    var fields = {
+      company: null, battery: null, sku: null, sap: null,
+      quantity: null, date: null, staff: null,
+      footer: null, barcodeData: null, barcodeType: 'CODE128',
+      printer: null, extras: []
+    };
 
-    /* QR Code — ^BQN,model,magnification */
-    if (upper.startsWith('^BQ')) {
-      var stripped = tok.replace(/^\^BQ[NnBbRrLl]?,?/i, '');
-      var p = stripped.split(',');
-      var mag = parseFloat(p[1]) || 5;
-      qrNext = { size: Math.round(mag * 10 * SCALE) };
-      return;
-    }
-
-    /* Field Data — ^FDdata  (ends at next ^ which our tokeniser already handled) */
-    if (upper.startsWith('^FD')) {
-      var text = tok.substring(3).replace(/\^FS$/i, '').trim();
-      var snapX = curX, snapY = curY;
-
-      /* ── Barcode ── */
-      if (barcodeNext) {
-        var bc = barcodeNext;
-        barcodeNext = null;
-        var svgEl = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-        place(svgEl, snapX, snapY);
-        try {
-          JsBarcode(svgEl, text, {
-            format:       bc.type,
-            height:       bc.height * SCALE,
-            width:        Math.max(1.2, SCALE * 2),
-            displayValue: bc.showText,
-            fontSize:     Math.round(10 * SCALE),
-            margin:       2,
-            background:   '#ffffff',
-            lineColor:    '#000000'
-          });
-        } catch (e) {
-          svgEl.remove();
-          var fb = document.createElement('div');
-          fb.style.cssText = 'font-size:' + (10 * SCALE) + 'px;color:#dc2626;';
-          fb.textContent = '[Barcode err: ' + e.message + ']';
-          place(fb, snapX, snapY);
-        }
+    filtered.forEach(function(s) {
+      var u = s.toUpperCase();
+      if (/^DURACELL/.test(s)) { fields.company = s; return; }
+      if (/^BATTERY:/i.test(s)) { fields.battery = s.replace(/^BATTERY:/i,'').trim(); return; }
+      if (/^SKU\s*No\./i.test(s)) {
+        var m = s.match(/SKU\s*No\.\s*:?\s*([^\s\/]+)/i);
+        if (m) fields.sku = m[1];
+        var sapM = s.match(/SAP\s*:?\s*(\d{5,})/i);
+        if (sapM) fields.sap = sapM[1];
         return;
       }
-
-      /* ── QR Code ── */
-      if (qrNext) {
-        var qr = qrNext;
-        qrNext = null;
-        var qrData = text.startsWith('QA,') ? text.substring(3) : text;
-        var qrDiv = document.createElement('div');
-        place(qrDiv, snapX, snapY);
-        try {
-          new QRCode(qrDiv, {
-            text:          qrData,
-            width:         qr.size,
-            height:        qr.size,
-            correctLevel:  QRCode.CorrectLevel.M
-          });
-        } catch (e) {
-          qrDiv.textContent = '[QR err]';
-        }
-        return;
+      if (/^QUANTITY:/i.test(s)) { fields.quantity = s.replace(/^QUANTITY:/i,'').trim(); return; }
+      if (/^BEST\s+INSTALLED/i.test(s)) { fields.date = s; return; }
+      if (/^STAFF\s+NO\./i.test(s)) {
+        var m = s.match(/STAFF\s*NO\.\s*:?\s*(.*)/i);
+        fields.staff = m ? m[1].trim() : ''; return;
       }
+      if (/^MADE\s+IN\s+CHINA/i.test(s)) { fields.footer = s; return; }
+      if (/^PACKING\s+DATE/i.test(s)) { return; } // label
+      if (/^Code\d+$|^CODE128$|^CODE39$|^EAN/i.test(s)) {
+        fields.barcodeType = s.toUpperCase().replace(/^Code/i,'CODE'); return;
+      }
+      // SAP number standalone
+      if (/^\d{7}$/.test(s) && !fields.sap) { fields.sap = s; return; }
+      // Barcode data: looks like 10+ digit number or XXX placeholders
+      if (/^X+(\s*X+)*$/.test(s) || (/^\d{10,}$/.test(s))) { fields.barcodeData = s; return; }
+      if (s.length < 60 && /[A-Za-z]/.test(s)) fields.extras.push(s);
+    });
 
-      /* ── Plain text ── */
-      var el = document.createElement('div');
-      el.style.cssText =
-        'position:absolute;' +
-        'left:'        + (snapX * SCALE) + 'px;' +
-        'top:'         + (snapY * SCALE) + 'px;' +
-        'font-family:Arial,Helvetica,sans-serif;' +
-        'font-size:'   + (fontH * SCALE) + 'px;' +
-        'color:#000000;' +
-        'white-space:nowrap;' +
-        'line-height:1;';
-      el.textContent = text;
+    // Find printer info
+    var printerM = raw.match(/ZDesigner[\s\w]+(?:ZPL|EPL2)/);
+    if (printerM) fields.printer = printerM[0];
+
+    return fields;
+  }
+
+  // Generate approximate ZPL from extracted NiceLabel content
+  function niceLabelToZPL(fields) {
+    var company  = fields.company  || 'DURACELL(CHINA)LTD.';
+    var battery  = fields.battery  ? 'BATTERY: ' + fields.battery : 'BATTERY:';
+    var sku      = fields.sku      ? 'SKU No.: ' + fields.sku + (fields.sap ? '/SAP: ' + fields.sap : '') : '';
+    var quantity = fields.quantity ? 'QUANTITY: ' + fields.quantity : 'QUANTITY:';
+    var dateLine = fields.date     || 'BEST INSTALLED BY MM-YYYY';
+    var staff    = 'STAFF NO.: ' + (fields.staff || '');
+    var footer   = fields.footer   || 'MADE IN CHINA';
+    var bcData   = (fields.barcodeData && !/^X/.test(fields.barcodeData)) ? fields.barcodeData
+                   : (fields.sap || '0000000');
+
+    return [
+      '^XA',
+      '^PW1219^LL406^LH0,0',           // 6"×2" at 203 DPI
+      '^CF0,22',
+      // Left column – text fields
+      '^FO16,14^A0N,30,30^FD' + company  + '^FS',
+      '^FO16,48^A0N,22,22^FD' + sku      + '^FS',
+      '^FO16,74^A0N,22,22^FD' + battery  + '^FS',
+      '^FO16,100^A0N,22,22^FD' + quantity + '^FS',
+      '^FO16,126^A0N,22,22^FD' + dateLine + '^FS',
+      '^FO16,152^A0N,22,22^FDPACKING DATE:^FS',
+      '^FO16,178^A0N,22,22^FD' + staff   + '^FS',
+      '^FO16,204^A0N,22,22^FD' + footer  + '^FS',
+      // Divider line
+      '^FO660,8^GB4,388,4^FS',
+      // Barcode area
+      '^FO680,14^A0N,22,22^FD' + bcData  + '^FS',
+      '^FO672,40^BCN,260,N,N,N^FD' + bcData + '^FS',
+      '^XZ'
+    ].join('');
+  }
+
+  function renderNiceLabelBinary(content, surface, SCALE, labelW, labelH) {
+    var fields = extractNiceLabelContent(content);
+    var zpl    = niceLabelToZPL(fields);
+
+    // Put generated ZPL into editor
+    editor.value = '/* ── Auto-generated from NiceLabel binary — edit as needed ── */\n\n' + zpl;
+    currentZPL   = zpl;
+
+    // Render it as ZPL
+    renderZPL(zpl, surface, SCALE);
+
+    // Add NiceLabel info strip at bottom
+    var strip = document.createElement('div');
+    strip.style.cssText = 'position:absolute;bottom:0;left:0;right:0;background:rgba(91,33,182,0.88);' +
+      'color:#fff;font-size:9px;padding:3px 8px;display:flex;align-items:center;gap:6px;z-index:20;';
+    strip.innerHTML = '<span style="font-weight:700;">NiceLabel Binary</span>' +
+      '<span>Fields extracted — ZPL generated in editor. Review & adjust positions as needed.</span>';
+    if (fields.printer) {
+      strip.innerHTML += '<span style="margin-left:auto;opacity:.8;">🖨 ' + fields.printer + '</span>';
+    }
+    surface.appendChild(strip);
+  }
+
+  /* ══════════════════════════════════════════════════════════════════════════
+     SHARED HELPERS
+  ══════════════════════════════════════════════════════════════════════════ */
+  function drawBarcode(surface, x, y, data, type, height, showText, SCALE) {
+    var svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.style.position = 'absolute';
+    svg.style.left     = (x * SCALE) + 'px';
+    svg.style.top      = (y * SCALE) + 'px';
+    surface.appendChild(svg);
+    try {
+      JsBarcode(svg, data, {
+        format: type, height: Math.max(10, height * SCALE),
+        width: Math.max(1, SCALE * 2), displayValue: showText,
+        fontSize: Math.max(8, Math.round(9 * SCALE)),
+        margin: 2, background: '#fff', lineColor: '#000'
+      });
+    } catch (e) {
+      svg.remove();
+      var fb = document.createElement('div');
+      fb.style.cssText = 'position:absolute;left:' + (x*SCALE) + 'px;top:' + (y*SCALE) +
+        'px;font-size:10px;color:#dc2626;border:1px dashed #dc2626;padding:2px 4px;';
+      fb.textContent = '[' + type + ': ' + data + ']';
+      surface.appendChild(fb);
+    }
+  }
+
+  function drawQR(surface, x, y, data, size) {
+    var d = data.startsWith('QA,') ? data.substring(3) : data;
+    var div = document.createElement('div');
+    div.style.position = 'absolute';
+    div.style.left = x + 'px';
+    div.style.top  = y + 'px';
+    surface.appendChild(div);
+    try { new QRCode(div, { text: d, width: size, height: size, correctLevel: QRCode.CorrectLevel.M }); }
+    catch (e) { div.textContent = '[QR error]'; }
+  }
+
+  /* ══════════════════════════════════════════════════════════════════════════
+     ZPL RENDERER
+  ══════════════════════════════════════════════════════════════════════════ */
+  function renderZPL(content, surface, SCALE) {
+    var raw    = content.replace(/\r/g, '').replace(/\n/g, '');
+    var tokens = [];
+    var k = 0;
+    while (k < raw.length) {
+      if (raw[k] === '^') {
+        var end = raw.indexOf('^', k + 1);
+        if (end === -1) end = raw.length;
+        tokens.push(raw.substring(k, end));
+        k = end;
+      } else { k++; }
+    }
+
+    var curX = 0, curY = 0, fontH = 30, fontW = 30;
+    var barcodeNext = null, qrNext = null;
+
+    function place(el, x, y) {
+      el.style.position = 'absolute';
+      el.style.left = (x * SCALE) + 'px';
+      el.style.top  = (y * SCALE) + 'px';
       surface.appendChild(el);
+    }
+
+    tokens.forEach(function (tok) {
+      var upper = tok.toUpperCase();
+
+      if (upper.startsWith('^FO')) {
+        var p = tok.substring(3).split(',');
+        curX = parseFloat(p[0]) || 0; curY = parseFloat(p[1]) || 0; return;
+      }
+      if (upper.match(/^\^A[0-9A-Z][NBRLT]?,?/)) {
+        var p = tok.replace(/^\^A[0-9A-Za-z][NnBbRrLlTt]?,?/, '').split(',');
+        fontH = parseFloat(p[0]) || 30; fontW = parseFloat(p[1] || p[0]) || fontH; return;
+      }
+      if (upper.startsWith('^CF')) {
+        var p = tok.substring(3).split(',');
+        if (p[1]) fontH = parseFloat(p[1]) || fontH;
+        if (p[2]) fontW = parseFloat(p[2]) || fontW; return;
+      }
+      if (upper.startsWith('^GB')) {
+        var p = tok.substring(3).split(',');
+        var el = document.createElement('div');
+        el.style.width      = ((parseFloat(p[0])||1) * SCALE) + 'px';
+        el.style.height     = (Math.max(parseFloat(p[1])||1, parseFloat(p[2])||1) * SCALE) + 'px';
+        el.style.background = '#000';
+        place(el, curX, curY); return;
+      }
+      if (upper.startsWith('^BC')) {
+        var p = tok.replace(/^\^BC[NnBbRrLl]?,?/i,'').split(',');
+        barcodeNext = { type:'CODE128', height:parseFloat(p[0])||100, showText:(p[1]||'Y').toUpperCase()!=='N' }; return;
+      }
+      if (upper.startsWith('^B3')) {
+        var p = tok.replace(/^\^B3[NnBbRrLl]?,?/i,'').split(',');
+        barcodeNext = { type:'CODE39', height:parseFloat(p[1])||100, showText:(p[2]||'Y').toUpperCase()!=='N' }; return;
+      }
+      if (upper.startsWith('^BE')) {
+        var p = tok.replace(/^\^BE[NnBbRrLl]?,?/i,'').split(',');
+        barcodeNext = { type:'EAN13', height:parseFloat(p[0])||100, showText:(p[1]||'Y').toUpperCase()!=='N' }; return;
+      }
+      if (upper.startsWith('^BU')) {
+        var p = tok.replace(/^\^BU[NnBbRrLl]?,?/i,'').split(',');
+        barcodeNext = { type:'UPC', height:parseFloat(p[0])||100, showText:(p[1]||'Y').toUpperCase()!=='N' }; return;
+      }
+      if (upper.startsWith('^B8')) {
+        var p = tok.replace(/^\^B8[NnBbRrLl]?,?/i,'').split(',');
+        barcodeNext = { type:'EAN8', height:parseFloat(p[0])||100, showText:(p[1]||'Y').toUpperCase()!=='N' }; return;
+      }
+      if (upper.startsWith('^BQ')) {
+        var p = tok.replace(/^\^BQ[NnBbRrLl]?,?/i,'').split(',');
+        qrNext = { size: Math.max(40, Math.round((parseFloat(p[1])||5) * 10 * SCALE)) }; return;
+      }
+      if (upper.startsWith('^FD')) {
+        var text = tok.substring(3).replace(/\^FS$/i,'').trim();
+        var sx = curX, sy = curY;
+        if (barcodeNext) {
+          var bc = barcodeNext; barcodeNext = null;
+          drawBarcode(surface, sx, sy, text, bc.type, bc.height, bc.showText, SCALE); return;
+        }
+        if (qrNext) {
+          var qr = qrNext; qrNext = null;
+          drawQR(surface, sx * SCALE, sy * SCALE, text, qr.size); return;
+        }
+        var el = document.createElement('div');
+        el.style.cssText = 'position:absolute;left:' + (sx*SCALE) + 'px;top:' + (sy*SCALE) +
+          'px;font-family:Arial,sans-serif;font-size:' + (fontH*SCALE) +
+          'px;color:#000;white-space:nowrap;line-height:1;';
+        el.textContent = text;
+        surface.appendChild(el);
+      }
+    });
+  }
+
+  /* ══════════════════════════════════════════════════════════════════════════
+     EPL2 RENDERER
+  ══════════════════════════════════════════════════════════════════════════ */
+  // EPL2 built-in font sizes (dots w × h)
+  var EPL2_FONTS = { '1':{w:8,h:12},'2':{w:10,h:16},'3':{w:12,h:20},
+                     '4':{w:14,h:24},'5':{w:32,h:48} };
+
+  function epl2BarcodeType(code) {
+    var map = { '1':'CODE128','3':'CODE39','3C':'CODE39','3D':'CODE39',
+                'E13':'EAN13','E130':'EAN13','EA':'EAN13',
+                'U':'UPC','UA':'UPC','E8':'EAN8','2U':'UPC' };
+    return map[code.toUpperCase()] || 'CODE128';
+  }
+
+  function renderEPL2(content, surface, SCALE, inW, inH, dpi) {
+    var lines = content.replace(/\r/g,'').split('\n');
+    lines.forEach(function(line) {
+      line = line.trim();
+      if (!line) return;
+      var cmd = line[0].toUpperCase();
+
+      /* q — set label width in dots */
+      if (cmd === 'Q' && line[1] && line[1] !== ' ') {
+        // ^Q label_length,gap — ignore for rendering (user sets via toolbar)
+        return;
+      }
+
+      /* A — text: A x,y,rotation,font,xmul,ymul,reverse,"data" */
+      var aMatch = line.match(/^A(\d+),(\d+),(\d+),(\w+),(\d+),(\d+),([NR]),"(.*)"/i);
+      if (aMatch) {
+        var x = parseInt(aMatch[1]), y = parseInt(aMatch[2]);
+        var font = aMatch[4], xmul = parseInt(aMatch[5]), ymul = parseInt(aMatch[6]);
+        var data = aMatch[8];
+        var fh = (EPL2_FONTS[font] ? EPL2_FONTS[font].h : 14) * ymul;
+        var el = document.createElement('div');
+        el.style.cssText = 'position:absolute;left:' + (x*SCALE) + 'px;top:' + (y*SCALE) +
+          'px;font-family:Arial,sans-serif;font-size:' + (fh*SCALE) +
+          'px;color:#000;white-space:nowrap;line-height:1;';
+        el.textContent = data;
+        surface.appendChild(el);
+        return;
+      }
+
+      /* B — barcode: B x,y,rotation,type,narrow,wide,height,visible,"data" */
+      var bMatch = line.match(/^B(\d+),(\d+),(\d+),(\w+),(\d+),(\d+),(\d+),([BN]),"(.*)"/i);
+      if (bMatch) {
+        var x = parseInt(bMatch[1]), y = parseInt(bMatch[2]);
+        var type = epl2BarcodeType(bMatch[4]);
+        var height = parseInt(bMatch[7]);
+        var visible = bMatch[8].toUpperCase() === 'B';
+        var data = bMatch[9];
+        drawBarcode(surface, x, y, data, type, height, visible, SCALE);
+        return;
+      }
+
+      /* LO — line draw: LO x,y,width,height */
+      var loMatch = line.match(/^LO(\d+),(\d+),(\d+),(\d+)/i);
+      if (loMatch) {
+        var el = document.createElement('div');
+        el.style.cssText = 'position:absolute;left:' + (parseInt(loMatch[1])*SCALE) + 'px;' +
+          'top:' + (parseInt(loMatch[2])*SCALE) + 'px;' +
+          'width:' + (parseInt(loMatch[3])*SCALE) + 'px;' +
+          'height:' + (Math.max(1,parseInt(loMatch[4]))*SCALE) + 'px;background:#000;';
+        surface.appendChild(el);
+        return;
+      }
+
+      /* LE / LW — box draw */
+      var boxMatch = line.match(/^L[EW](\d+),(\d+),(\d+),(\d+)/i);
+      if (boxMatch) {
+        var bx=parseInt(boxMatch[1]),by=parseInt(boxMatch[2]),
+            bw=parseInt(boxMatch[3]),bh=parseInt(boxMatch[4]);
+        ['top','bottom','left','right'].forEach(function(side,si) {
+          var el = document.createElement('div');
+          el.style.position='absolute'; el.style.background='#000';
+          if (side==='top')    { el.style.left=(bx*SCALE)+'px'; el.style.top=(by*SCALE)+'px'; el.style.width=(bw*SCALE)+'px'; el.style.height='2px'; }
+          if (side==='bottom') { el.style.left=(bx*SCALE)+'px'; el.style.top=((by+bh)*SCALE)+'px'; el.style.width=(bw*SCALE)+'px'; el.style.height='2px'; }
+          if (side==='left')   { el.style.left=(bx*SCALE)+'px'; el.style.top=(by*SCALE)+'px'; el.style.width='2px'; el.style.height=(bh*SCALE)+'px'; }
+          if (side==='right')  { el.style.left=((bx+bw)*SCALE)+'px'; el.style.top=(by*SCALE)+'px'; el.style.width='2px'; el.style.height=(bh*SCALE)+'px'; }
+          surface.appendChild(el);
+        });
+      }
+    });
+  }
+
+  /* ══════════════════════════════════════════════════════════════════════════
+     MAIN RENDER
+  ══════════════════════════════════════════════════════════════════════════ */
+  function render() {
+    var content = currentZPL;
+    var labelW  = parseFloat(document.getElementById('inWidth').value)  || 4;
+    var labelH  = parseFloat(document.getElementById('inHeight').value) || 6;
+    var dpmm    = parseFloat(document.getElementById('inDPI').value)    || 8;
+    var dpi     = dpmm * 25.4;
+
+    var DOTS_W = Math.round(labelW * dpi);
+    var DOTS_H = Math.round(labelH * dpi);
+    var DISP_W = Math.min(420, window.innerWidth - 56);
+    var SCALE  = DISP_W / DOTS_W;
+    var DISP_H = Math.round(DOTS_H * SCALE);
+
+    surface.style.width = DISP_W + 'px'; surface.style.height = DISP_H + 'px';
+    surface.style.display = 'block'; surface.style.alignItems = '';
+    surface.style.justifyContent = ''; surface.innerHTML = '';
+
+    sizeHint.textContent = labelW + '" × ' + labelH + '" · ' +
+      DOTS_W + '×' + DOTS_H + ' dots · ' + (SCALE * 100).toFixed(0) + '% scale';
+
+    function showError(msg) {
+      surface.innerHTML = '<div class="error-box">⚠️ ' + msg + '</div>';
+      surface.style.display = 'flex'; surface.style.alignItems = 'center';
+      surface.style.justifyContent = 'center';
+    }
+
+    if (!content) {
+      surface.innerHTML = '<div class="msg">Open a <strong>.lbl/.zpl</strong> file or paste content and click Render.</div>';
       return;
     }
 
-  }); // end tokens.forEach
+    var fmt = detectFormat(content);
+
+    /* Show format badge */
+    var badgeColors = {
+      'ZPL':           '#1a3a5c',
+      'EPL2':          '#065f46',
+      'NICELABEL_BIN': '#5b21b6',
+      'NICELABEL_XML': '#7c3aed',
+      'CPCL':          '#92400e',
+      'UNKNOWN':       '#6b7280'
+    };
+    var badge = document.createElement('div');
+    badge.style.cssText = 'position:absolute;top:4px;right:4px;background:' +
+      (badgeColors[fmt] || '#6b7280') +
+      ';color:#fff;font-size:9px;font-weight:700;padding:2px 7px;border-radius:8px;z-index:10;';
+    badge.textContent = fmt === 'NICELABEL_BIN' ? 'NiceLabel ★' :
+                        fmt === 'NICELABEL_XML' ? 'NiceLabel XML' : fmt;
+    surface.appendChild(badge);
+
+    if (fmt === 'ZPL') {
+      renderZPL(content, surface, SCALE);
+    }
+    else if (fmt === 'EPL2') {
+      renderEPL2(content, surface, SCALE, labelW, labelH, dpi);
+    }
+    else if (fmt === 'NICELABEL_BIN') {
+      renderNiceLabelBinary(content, surface, SCALE, labelW, labelH);
+    }
+    else if (fmt === 'NICELABEL_XML') {
+      showError('NiceLabel XML format detected.<br><small>Export your label as ZPL from NiceLabel Designer, then open the exported file here.</small>');
+    }
+    else if (fmt === 'CPCL') {
+      showError('CPCL format detected.<br><small>CPCL is used on mobile Zebra printers. Convert to ZPL in your label software and try again.</small>');
+    }
+    else {
+      /* Unknown — show raw text so user can inspect */
+      var pre = document.createElement('pre');
+      pre.style.cssText = 'font-size:10px;padding:10px;color:#374151;white-space:pre-wrap;word-break:break-all;line-height:1.5;';
+      pre.textContent = content.substring(0, 2000) + (content.length > 2000 ? '\n…(truncated)' : '');
+      surface.appendChild(pre);
+      var info = document.createElement('div');
+      info.style.cssText = 'position:absolute;bottom:0;left:0;right:0;background:#fff7ed;' +
+        'padding:6px 10px;font-size:10px;color:#92400e;border-top:1px solid #fed7aa;';
+      info.textContent = 'Unknown format — showing raw content. Expected ZPL (^XA…^XZ) or EPL2 (A/B commands).';
+      surface.appendChild(info);
+    }
+  }
+
+  /* ── Initial render ─────────────────────────────────────────────────────── */
+  if (!urlZPL) {
+    surface.style.width  = Math.min(420, window.innerWidth - 56) + 'px';
+    surface.style.height = '160px';
+  }
 
 })();
 </script>
