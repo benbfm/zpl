@@ -361,21 +361,18 @@
     var fmt = detectFormat(cleaned, currentFilename);
 
     if (fmt === 'NICELABEL_BIN') {
-      // Convert NiceLabel binary → ZPL once, then render as standard ZPL.
-      // Coordinates from struct.unpack('<4d') at string_offset-46 in the OLE2 binary.
-      var fields = extractNiceLabelContent(cleaned);
-      var zpl    = niceLabelToZPL(fields);
-
-      // Set label dimensions to match ZM400 stock (6.5" × 2.7" @ 8 dpmm)
+      // Set label dimensions to match ZM400 stock (6.5" × 2.7" @ 8 dpmm = 200 DPI)
       document.getElementById('inWidth').value  = '6.5';
       document.getElementById('inHeight').value = '2.7';
       document.getElementById('inDPI').value    = '8';
       document.getElementById('inPreset').value = '';
 
-      // Replace state with generated ZPL — clear filename so re-renders use ZPL path
-      currentZPL      = zpl;
-      currentFilename = '';
-      editor.value    = zpl;
+      // Keep the raw binary in currentZPL and the .lbl filename in currentFilename
+      // so that every re-render goes through renderNiceLabelBinary (direct HTML path).
+      // The editor shows the equivalent ZPL for reference only.
+      currentZPL      = cleaned;
+      currentFilename = currentFilename;  // already set above
+      editor.value    = niceLabelToZPL(extractNiceLabelContent(cleaned));
 
       openEditor();
       render();
@@ -581,10 +578,8 @@
       '^FO104,371^A0N,50,50^FDPACKING DATE:^FS',
       '^FO104,436^A0N,50,50^FDSTAFF NO.:^FS',
       '^FO104,500^A0N,50,50^FD' + footer   + '^FS',
-      // ── Staff value in left section ─────────────────────────────────────
+      // ── Staff value (same row as PACKING DATE, x=611) ───────────────────
       '^FO611,371^A0N,50,50^FD'  + staffVal + '^FS',
-      // ── Divider at x=840 (left edge of barcode column) ──────────────────
-      '^FO840,40^GB4,500,4^FS',
       // ── Barcode: stock x=854, y=165, height=275 dots (200 DPI, ZM400) ───
       '^FO854,165^BCN,275,N,N,N^FD' + bcData + '^FS',
       '^FO880,450^A0N,38,38^FD'    + bcData + '^FS',
@@ -593,14 +588,54 @@
   }
 
   function renderNiceLabelBinary(content, surface, SCALE, labelW, labelH) {
-    // NiceLabel binary is converted to ZPL in loadZPL before render() is called.
-    // If this path is reached (e.g. direct call), generate ZPL and render it.
+    // Direct HTML rendering — completely bypasses the ZPL tokenizer so that
+    // binary bytes that look like ^ commands cannot corrupt element positions.
+    // Coordinates are hardcoded from struct.unpack analysis of ZM400 200-DPI file.
     var fields = extractNiceLabelContent(content);
-    var zpl    = niceLabelToZPL(fields);
-    currentZPL      = zpl;
-    currentFilename = '';
-    editor.value    = zpl;
-    renderZPL(zpl, surface, SCALE);
+
+    var sc = SCALE;  // 1.0 at 100% scale
+
+    // Sanitised text values
+    var company  = sanitizeZPL(fields.company)  || 'DURACELL(CHINA)LTD.';
+    var battery  = 'BATTERY: '  + (sanitizeZPL(fields.battery)  || '');
+    var sapPart  = fields.sap ? '  /SAP: ' + sanitizeZPL(fields.sap) : '';
+    var sku      = 'SKU No.: '  + (sanitizeZPL(fields.sku) || '') + sapPart;
+    var quantity = 'QUANTITY: ' + (sanitizeZPL(fields.quantity) || '');
+    var staffVal = sanitizeZPL(fields.staff) || 'XXXX8511XX';
+    var bcData   = sanitizeZPL(fields.sap) || '5017134';
+    if (!/^\d+$/.test(bcData)) bcData = '5017134';
+
+    var fh = Math.round(50 * sc);   // row font height px
+    var fhSm = Math.round(38 * sc); // small font for barcode number
+
+    function txt(xDot, yDot, text, fontSize) {
+      var el = document.createElement('div');
+      el.style.cssText = 'position:absolute;' +
+        'left:' + Math.round(xDot * sc) + 'px;' +
+        'top:'  + Math.round(yDot * sc) + 'px;' +
+        'font-family:Arial,sans-serif;font-size:' + (fontSize || fh) + 'px;' +
+        'color:#000;white-space:nowrap;line-height:1;';
+      el.textContent = text;
+      surface.appendChild(el);
+    }
+
+    // Text rows (left column)
+    txt(104, 46,  company);
+    txt(104, 111, sku);
+    txt(104, 176, battery);
+    txt(104, 241, quantity);
+    txt(104, 306, 'BEST INSTALLED BY: MM-YYYY');
+    txt(104, 371, 'PACKING DATE:');
+    txt(104, 436, 'STAFF NO.:');
+    txt(104, 500, 'MADE IN CHINA');
+    // Staff value (same row as PACKING DATE, label design x=611)
+    txt(611, 371, staffVal);
+
+    // Barcode column: right of divider at x=840
+    // Barcode: x=854, y=165, height=275 dots (ZM400 binary coords)
+    drawBarcode(surface, 854, 165, bcData, 'CODE128', 275, false, sc);
+    // SAP number printed below barcode
+    txt(880, 450, bcData, fhSm);
   }
 
   /* ══════════════════════════════════════════════════════════════════════════
