@@ -856,6 +856,57 @@
   }
 
   /* ══════════════════════════════════════════════════════════════════════════
+     LABELARY API RENDERER
+     Sends ZPL to api.labelary.com and shows the returned PNG image.
+     Falls back to the local renderer on any network/CORS error.
+  ══════════════════════════════════════════════════════════════════════════ */
+  function renderViaLabelary(zpl, surface, badge, dpmm, labelW, labelH, fallback) {
+    var url = 'https://api.labelary.com/v1/printers/' + dpmm +
+              'dpmm/labels/' + labelW + 'x' + labelH + '/0/';
+
+    // Show loading indicator while fetching
+    var loader = document.createElement('div');
+    loader.style.cssText = 'position:absolute;inset:0;display:flex;align-items:center;' +
+      'justify-content:center;font-size:12px;color:#6b7280;';
+    loader.textContent = 'Rendering via Labelary…';
+    surface.appendChild(loader);
+
+    fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'image/png' },
+      body: zpl
+    })
+    .then(function (resp) {
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      return resp.blob();
+    })
+    .then(function (blob) {
+      // Clear surface and show image
+      surface.innerHTML = '';
+      surface.appendChild(badge);
+
+      var objUrl = URL.createObjectURL(blob);
+      var img = document.createElement('img');
+      img.style.cssText = 'display:block;max-width:100%;height:auto;';
+      img.src = objUrl;
+      img.onload = function () {
+        // Resize surface to natural image dimensions
+        surface.style.width  = img.naturalWidth  + 'px';
+        surface.style.height = img.naturalHeight + 'px';
+        sizeHint.textContent = labelW + '" × ' + labelH +
+          '" · rendered by Labelary API · ' + img.naturalWidth + '×' + img.naturalHeight + 'px';
+      };
+      surface.appendChild(img);
+    })
+    .catch(function (err) {
+      console.warn('Labelary API unavailable (' + err.message + '), using local renderer');
+      surface.innerHTML = '';
+      surface.appendChild(badge);
+      if (fallback) fallback();
+    });
+  }
+
+  /* ══════════════════════════════════════════════════════════════════════════
      MAIN RENDER
   ══════════════════════════════════════════════════════════════════════════ */
   function render() {
@@ -911,13 +962,24 @@
     surface.appendChild(badge);
 
     if (fmt === 'ZPL') {
-      renderZPL(content, surface, SCALE);
+      // Try Labelary API first (pixel-perfect rendering), fall back to local renderer
+      var zplForLabelary = content;
+      renderViaLabelary(zplForLabelary, surface, badge, dpmm, labelW, labelH, function () {
+        renderZPL(content, surface, SCALE);
+      });
     }
     else if (fmt === 'EPL2') {
       renderEPL2(content, surface, SCALE, labelW, labelH, dpi);
     }
     else if (fmt === 'NICELABEL_BIN') {
-      renderNiceLabelBinary(content, surface, SCALE, labelW, labelH);
+      // For NiceLabel binary: generate ZPL and send to Labelary; fall back to direct HTML
+      var fields = extractNiceLabelContent(content);
+      var zpl    = niceLabelToZPL(fields);
+      // Keep editor in sync
+      if (editor.value.trim() === '' || editor.value === content) editor.value = zpl;
+      renderViaLabelary(zpl, surface, badge, dpmm, labelW, labelH, function () {
+        renderNiceLabelBinary(content, surface, SCALE, labelW, labelH);
+      });
     }
     else if (fmt === 'NICELABEL_XML') {
       showError('NiceLabel XML format detected.<br><small>Export your label as ZPL from NiceLabel Designer, then open the exported file here.</small>');
