@@ -642,22 +642,26 @@
      SHARED HELPERS
   ══════════════════════════════════════════════════════════════════════════ */
   function drawBarcode(surface, x, y, data, type, height, showText, SCALE) {
+    // Use a wrapper div for positioning — JsBarcode overwrites the SVG element's
+    // style attribute, which would clear any left/top we set directly on the SVG.
+    var wrap = document.createElement('div');
+    wrap.style.cssText = 'position:absolute;left:' + Math.round(x * SCALE) + 'px;' +
+                         'top:' + Math.round(y * SCALE) + 'px;line-height:0;';
+    surface.appendChild(wrap);
+
     var svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-    svg.style.position = 'absolute';
-    svg.style.left     = (x * SCALE) + 'px';
-    svg.style.top      = (y * SCALE) + 'px';
-    surface.appendChild(svg);
+    wrap.appendChild(svg);
     try {
       JsBarcode(svg, data, {
-        format: type, height: Math.max(10, height * SCALE),
-        width: Math.max(1, SCALE * 2), displayValue: showText,
+        format: type, height: Math.max(10, Math.round(height * SCALE)),
+        width: Math.max(1, Math.round(SCALE * 2)), displayValue: showText,
         fontSize: Math.max(8, Math.round(9 * SCALE)),
         margin: 2, background: '#fff', lineColor: '#000'
       });
     } catch (e) {
-      svg.remove();
+      wrap.remove();
       var fb = document.createElement('div');
-      fb.style.cssText = 'position:absolute;left:' + (x*SCALE) + 'px;top:' + (y*SCALE) +
+      fb.style.cssText = 'position:absolute;left:' + Math.round(x*SCALE) + 'px;top:' + Math.round(y*SCALE) +
         'px;font-size:10px;color:#dc2626;border:1px dashed #dc2626;padding:2px 4px;';
       fb.textContent = '[' + type + ': ' + data + ']';
       surface.appendChild(fb);
