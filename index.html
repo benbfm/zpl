@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>ZPL Preview</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: 'Segoe UI', sans-serif;
+    background: #f4f6f9;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    padding: 16px;
+  }
+
+  #preview-wrap {
+    background: #fff;
+    border-radius: 10px;
+    box-shadow: 0 2px 16px rgba(0,0,0,0.1);
+    padding: 12px;
+    max-width: 100%;
+    text-align: center;
+  }
+
+  #preview-wrap img {
+    max-width: 100%;
+    display: block;
+    border-radius: 4px;
+  }
+
+  .msg {
+    color: #6b7280;
+    font-size: 13px;
+    padding: 40px 20px;
+    text-align: center;
+  }
+
+  .msg .icon { font-size: 2rem; margin-bottom: 8px; }
+
+  .spinner {
+    width: 36px; height: 36px;
+    border: 4px solid #e5e7eb;
+    border-top-color: #1a3a5c;
+    border-radius: 50%;
+    animation: spin .8s linear infinite;
+    margin: 30px auto 10px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .error-box {
+    background: #fef2f2;
+    border: 1px solid #fecaca;
+    border-radius: 8px;
+    padding: 16px 20px;
+    color: #dc2626;
+    font-size: 13px;
+    max-width: 320px;
+    text-align: center;
+  }
+  .error-box .icon { font-size: 1.6rem; margin-bottom: 6px; }
+</style>
+</head>
+<body>
+
+<div id="preview-wrap">
+  <div class="msg">
+    <div class="spinner"></div>
+    <div>Rendering label…</div>
+  </div>
+</div>
+
+<script>
+(function () {
+  // Read ZPL from ?zpl= query parameter
+  var params  = new URLSearchParams(window.location.search);
+  var zpl     = params.get('zpl') || '';
+  var dpi     = params.get('dpi')    || '8dpmm';   // 6dpmm | 8dpmm | 12dpmm | 24dpmm
+  var width   = params.get('width')  || '4';        // label width in inches
+  var height  = params.get('height') || '6';        // label height in inches
+  var wrap    = document.getElementById('preview-wrap');
+
+  function showError(msg) {
+    wrap.innerHTML =
+      '<div class="error-box">' +
+        '<div class="icon">⚠️</div>' +
+        '<strong>Preview unavailable</strong><br/>' +
+        '<span style="font-size:12px;color:#6b7280;">' + msg + '</span>' +
+      '</div>';
+  }
+
+  if (!zpl) {
+    wrap.innerHTML =
+      '<div class="msg"><div class="icon">🏷️</div>No ZPL provided.<br/>' +
+      '<span style="font-size:11px;">Pass ?zpl=^XA...^XZ in the URL.</span></div>';
+    return;
+  }
+
+  // Call Labelary API (HTTPS to avoid mixed-content block)
+  var url = 'https://api.labelary.com/v1/printers/' + dpi + '/labels/' +
+            width + 'x' + height + '/0/';
+
+  fetch(url, {
+    method:  'POST',
+    headers: {
+      'Accept':       'image/png',
+      'Content-Type': 'application/x-www-form-urlencoded'
+    },
+    body: 'file=' + encodeURIComponent(zpl)
+  })
+  .then(function (resp) {
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    return resp.blob();
+  })
+  .then(function (blob) {
+    // Convert blob → base64 data URL (works inside sandboxed iframes)
+    var reader = new FileReader();
+    reader.onload = function () {
+      var img = document.createElement('img');
+      img.src = reader.result;
+      img.alt = 'Label preview';
+      wrap.innerHTML = '';
+      wrap.appendChild(img);
+    };
+    reader.readAsDataURL(blob);
+  })
+  .catch(function (err) {
+    showError('Labelary API error: ' + err.message);
+  });
+})();
+</script>
+</body>
+</html>
