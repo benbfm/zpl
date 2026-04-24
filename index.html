@@ -357,18 +357,24 @@
     var fmt = detectFormat(cleaned, currentFilename);
 
     if (fmt === 'NICELABEL_BIN') {
-      // NiceLabel binary: detect printer DPI and pre-set label size
-      // ZM400 = 200 DPI, ZT410 = 203 DPI
-      var isZM400 = cleaned.includes('ZM400');
-      var dpiVal  = isZM400 ? '8' : '8';   // 200/203 DPI → 8 dpmm
-      document.getElementById('inWidth').value  = '6.5';  // 6.52" stock width (barcode right edge at x=1304/200dpi)
-      document.getElementById('inHeight').value = '2.7';  // stock height (text rows 46-500 + margin)
-      document.getElementById('inDPI').value    = dpiVal;
+      // Convert NiceLabel binary → ZPL once, then render as standard ZPL.
+      // Coordinates from struct.unpack('<4d') at string_offset-46 in the OLE2 binary.
+      var fields = extractNiceLabelContent(cleaned);
+      var zpl    = niceLabelToZPL(fields);
+
+      // Set label dimensions to match ZM400 stock (6.5" × 2.7" @ 8 dpmm)
+      document.getElementById('inWidth').value  = '6.5';
+      document.getElementById('inHeight').value = '2.7';
+      document.getElementById('inDPI').value    = '8';
       document.getElementById('inPreset').value = '';
-      // Don't open editor — binary is unreadable; editor will be replaced after render
-      render();
-      // Open editor AFTER render so user sees the generated ZPL
+
+      // Replace state with generated ZPL — clear filename so re-renders use ZPL path
+      currentZPL      = zpl;
+      currentFilename = '';
+      editor.value    = zpl;
+
       openEditor();
+      render();
       return;
     }
 
@@ -454,20 +460,14 @@
   function detectFormat(content, filename) {
     var t = content.trim();
     var u = t.toUpperCase();
-    // NiceLabel binary check FIRST — binary strings survive UTF-8 readAsText
-    // Must come before ^XA check: after first render, editor holds generated ZPL
-    // but we still want to keep the NICELABEL_BIN path for re-renders of .lbl files.
-    if (filename && /\.(lbl|nlbl)$/i.test(filename)) return 'NICELABEL_BIN';
-    if (t.includes('NicePower') || t.includes('ZebraDesigner') ||
-        content.includes('NICELbl') || content.includes('NicePower')) return 'NICELABEL_BIN';
-    // ZPL
     if (u.includes('^XA'))                          return 'ZPL';
     if (u.includes('<?XML') || u.includes('<LABEL') ||
         u.includes('<NICEFORM') || u.includes('<NICELABEL')) return 'NICELABEL_XML';
-    // EPL2: lines start with N / A / B / P / q / Q / R
     if (/^[NnPpRr]\s*$|^[Aqq]\d/m.test(t))         return 'EPL2';
-    // CPCL: starts with ! 0
     if (t.startsWith('! 0'))                        return 'CPCL';
+    if (t.includes('NicePower') || t.includes('ZebraDesigner') ||
+        content.includes('NICELbl')) return 'NICELABEL_BIN';
+    if (filename && /\.(lbl|nlbl)$/i.test(filename)) return 'NICELABEL_BIN';
     return 'UNKNOWN';
   }
 
@@ -576,89 +576,14 @@
   }
 
   function renderNiceLabelBinary(content, surface, SCALE, labelW, labelH) {
+    // NiceLabel binary is converted to ZPL in loadZPL before render() is called.
+    // If this path is reached (e.g. direct call), generate ZPL and render it.
     var fields = extractNiceLabelContent(content);
     var zpl    = niceLabelToZPL(fields);
-
-    // Put generated ZPL into editor (for copy/export — keep currentZPL as raw binary for re-renders)
-    editor.value = '/* ── Auto-generated from NiceLabel binary — edit as needed ── */\n\n' + zpl;
-
-    // ── Direct DOM render using decoded binary coordinates (200 DPI, ZM400) ──
-    // All coordinates are in STOCK dots (x includes left margin, y includes top margin).
-    // Positions from struct.unpack('<4d') at string_offset - 46 in the OLE2 binary:
-    //   company  x=104, y=46,  w=719, h=75   barcode  x=854, y=165, w=450, h=275
-    //   sku      x=104, y=111, w=959          date_var x=1017,y=304 (inside barcode bbox)
-    //   battery  x=104, y=176               divider  x=840  (left edge of barcode column)
-    //   quantity x=104, y=241, w=533
-    //   best_by  x=104, y=306                 Stock canvas: 1304×540 dots (6.52"×2.7" @200dpi)
-    //   pack_date x=104,y=371, w=496
-    //   staff_lbl x=104,y=436
-    //   made_in  x=104, y=500
-    //   staff_val x=611, y=367  (value field in left section)
-    var S = SCALE;
-
-    var company  = fields.company  || 'DURACELL(CHINA)LTD.';
-    var battery  = fields.battery  ? 'BATTERY: '  + fields.battery  : 'BATTERY:';
-    var sku      = fields.sku      ? 'SKU No.: '  + fields.sku + (fields.sap ? '  /SAP: ' + fields.sap : '') : 'SKU No.:';
-    var quantity = fields.quantity ? 'QUANTITY: ' + fields.quantity : 'QUANTITY:';
-    var dateVal  = fields.date     || 'MM-YYYY';
-    var staffVal = fields.staff    || '';
-    var footer   = fields.footer   || 'MADE IN CHINA';
-    var bcData   = fields.barcodeData || fields.sap || '0000000';
-
-    // Font size: 50-dot cap height at display scale
-    var fMain = Math.round(50 * S);
-    var fSub  = Math.round(38 * S);
-
-    // DIVIDER at x=840 — text fields must not overflow past this boundary
-    var DIVIDER_X = 840;
-    var TEXT_MAX_W = Math.floor((DIVIDER_X - 104) * S);  // max pixel width for text
-
-    function txt(x, y, text, size, bold, maxW) {
-      var el = document.createElement('div');
-      el.style.cssText = 'position:absolute;left:' + (x*S) + 'px;top:' + (y*S) +
-        'px;font-family:Arial Black,Arial,sans-serif;font-size:' + (size||fMain) +
-        'px;font-weight:' + (bold ? '900' : '700') + ';color:#000;white-space:nowrap;line-height:1;' +
-        'overflow:hidden;max-width:' + (maxW || TEXT_MAX_W) + 'px;';
-      el.textContent = text;
-      surface.appendChild(el);
-    }
-
-    // Left column — static labels (clipped at divider via max-width)
-    // Date value (x=1017 in binary) falls inside barcode bbox → show inline with label instead
-    txt(104,  46,  company,                            fMain, true);
-    txt(104, 111,  sku);
-    txt(104, 176,  battery);
-    txt(104, 241,  quantity);
-    txt(104, 306, 'BEST INSTALLED BY: ' + dateVal);   // date_var merged here (binary: x=1017,y=304)
-    txt(104, 371, 'PACKING DATE:');
-    txt(104, 436, 'STAFF NO.:');
-    txt(104, 500,  footer);
-
-    // Staff value field at x=611, y=367 (left section, clipped at divider)
-    if (staffVal) txt(611, 367, staffVal, fMain, false, Math.floor(250*S));
-
-    // Divider line at x=840, from y=40 to y=540
-    var divEl = document.createElement('div');
-    divEl.style.cssText = 'position:absolute;left:' + (DIVIDER_X*S) + 'px;top:' + (40*S) +
-      'px;width:3px;height:' + (500*S) + 'px;background:#000;';
-    surface.appendChild(divEl);
-
-    // Barcode: stock x=854, y=165, height=275 dots (right column, no overlap with text)
-    drawBarcode(surface, 854, 165, bcData, fields.barcodeType || 'CODE128',
-                275, false, S);
-    // Human-readable barcode number below bars
-    txt(880, 448, bcData, fSub, false, Math.floor(400*S));
-
-    // Add NiceLabel info strip at bottom
-    var strip = document.createElement('div');
-    strip.style.cssText = 'position:absolute;bottom:0;left:0;right:0;background:rgba(91,33,182,0.88);' +
-      'color:#fff;font-size:9px;padding:3px 8px;display:flex;align-items:center;gap:6px;z-index:20;';
-    strip.innerHTML = '<span style="font-weight:700;">NiceLabel Binary</span>' +
-      '<span>Decoded from binary · ZPL exported to editor</span>';
-    if (fields.printer) {
-      strip.innerHTML += '<span style="margin-left:auto;opacity:.8;">🖨 ' + fields.printer + '</span>';
-    }
-    surface.appendChild(strip);
+    currentZPL      = zpl;
+    currentFilename = '';
+    editor.value    = zpl;
+    renderZPL(zpl, surface, SCALE);
   }
 
   /* ══════════════════════════════════════════════════════════════════════════
