@@ -362,7 +362,7 @@
       var isZM400 = cleaned.includes('ZM400');
       var dpiVal  = isZM400 ? '8' : '8';   // 200/203 DPI → 8 dpmm
       document.getElementById('inWidth').value  = '6';
-      document.getElementById('inHeight').value = '2';
+      document.getElementById('inHeight').value = '3';   // ZM400 label is 6"×3" (binary y coords reach 500/200=2.5")
       document.getElementById('inDPI').value    = dpiVal;
       document.getElementById('inPreset').value = '';
       // Don't open editor — binary is unreadable; editor will be replaced after render
@@ -531,36 +531,45 @@
     return fields;
   }
 
-  // Generate approximate ZPL from extracted NiceLabel content
+  // Generate ZPL from extracted NiceLabel content
+  // Coordinates derived from binary decode of ZDesigner ZM400 200 Dpi (ZPL) label file:
+  //   Text left margin x=104, rows at y=46,111,176,241,306,371,436,500 (65-dot spacing)
+  //   Date variable (MM-YYYY) at x=1017,y=304; Staff value at x=611,y=367
+  //   Label: 6"×3" = 1200×600 dots at 200 DPI
   function niceLabelToZPL(fields) {
     var company  = fields.company  || 'DURACELL(CHINA)LTD.';
     var battery  = fields.battery  ? 'BATTERY: ' + fields.battery : 'BATTERY:';
-    var sku      = fields.sku      ? 'SKU No.: ' + fields.sku + (fields.sap ? '/SAP: ' + fields.sap : '') : '';
+    var sku      = fields.sku      ? 'SKU No.: ' + fields.sku + (fields.sap ? '  /SAP: ' + fields.sap : '') : 'SKU No.:';
     var quantity = fields.quantity ? 'QUANTITY: ' + fields.quantity : 'QUANTITY:';
-    var dateLine = fields.date     || 'BEST INSTALLED BY MM-YYYY';
-    var staff    = 'STAFF NO.: ' + (fields.staff || '');
+    var dateVal  = fields.date     || 'MM-YYYY';
+    var staffVal = fields.staff    || 'XXXX8511XX';
     var footer   = fields.footer   || 'MADE IN CHINA';
     var bcData   = (fields.barcodeData && !/^X/.test(fields.barcodeData)) ? fields.barcodeData
                    : (fields.sap || '0000000');
 
     return [
       '^XA',
-      '^PW1219^LL406^LH0,0',           // 6"×2" at 203 DPI
-      '^CF0,22',
-      // Left column – text fields
-      '^FO16,14^A0N,30,30^FD' + company  + '^FS',
-      '^FO16,48^A0N,22,22^FD' + sku      + '^FS',
-      '^FO16,74^A0N,22,22^FD' + battery  + '^FS',
-      '^FO16,100^A0N,22,22^FD' + quantity + '^FS',
-      '^FO16,126^A0N,22,22^FD' + dateLine + '^FS',
-      '^FO16,152^A0N,22,22^FDPACKING DATE:^FS',
-      '^FO16,178^A0N,22,22^FD' + staff   + '^FS',
-      '^FO16,204^A0N,22,22^FD' + footer  + '^FS',
-      // Divider line
-      '^FO660,8^GB4,388,4^FS',
-      // Barcode area
-      '^FO680,14^A0N,22,22^FD' + bcData  + '^FS',
-      '^FO672,40^BCN,260,N,N,N^FD' + bcData + '^FS',
+      '^PW1200^LL600^LH0,0',           // 6"×3" at 200 DPI (ZM400)
+      // ── Left column: static label text ──────────────────────────────────
+      // Rows at y=46,111,176,241,306,371,436,500; font ~50pt fits 65-dot row pitch
+      '^FO104,46^A0N,50,50^FD'  + company  + '^FS',
+      '^FO104,111^A0N,50,50^FD' + sku      + '^FS',
+      '^FO104,176^A0N,50,50^FD' + battery  + '^FS',
+      '^FO104,241^A0N,50,50^FD' + quantity + '^FS',
+      '^FO104,306^A0N,50,50^FDBEST INSTALLED BY:^FS',
+      '^FO104,371^A0N,50,50^FDPACKING DATE:^FS',
+      '^FO104,436^A0N,50,50^FDSTAFF NO.:^FS',
+      '^FO104,500^A0N,50,50^FD' + footer   + '^FS',
+      // ── Right column: variable data ─────────────────────────────────────
+      // Date variable (MM-YYYY) far right at x=1017, y=304
+      '^FO1017,304^A0N,50,50^FD' + dateVal  + '^FS',
+      // Staff value at x=611, y=367
+      '^FO611,371^A0N,50,50^FD'  + staffVal + '^FS',
+      // ── Divider line at x=740 (between text area and barcode zone) ──────
+      '^FO740,10^GB4,580,4^FS',
+      // ── Barcode area (right 38% of label, x=760 to x=1200) ─────────────
+      '^FO760,46^BCN,400,N,N,N^FD' + bcData + '^FS',
+      '^FO770,460^A0N,40,40^FD'   + bcData + '^FS',
       '^XZ'
     ].join('');
   }
