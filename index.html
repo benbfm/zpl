@@ -497,11 +497,12 @@
     if (m) fields.company = m[0].trim();
 
     // Battery type: "BATTERY:MX1500 CELL"
-    m = raw.match(/BATTERY:([^"\\\x00-\x1f]{1,40})/i);
+    // Exclude ^ (0x5E) from capture — binary bytes can form accidental ZPL tokens
+    m = raw.match(/BATTERY:([^"\\\^\x00-\x1f]{1,40})/i);
     if (m) fields.battery = m[1].trim();
 
     // SKU: "SKU No.:OHMX15HBKUS/SAP:"
-    m = raw.match(/SKU\s*No\.\s*:([^"\\\x00-\x1f]{1,60})/i);
+    m = raw.match(/SKU\s*No\.\s*:([^"\\\^\x00-\x1f]{1,60})/i);
     if (m) {
       var skuM = m[1].match(/([A-Z0-9]{5,})/i);
       if (skuM) fields.sku = skuM[1];
@@ -513,7 +514,7 @@
     if (!fields.sap) { m = raw.match(/\b(\d{7})\b/); if (m) fields.sap = m[1]; }
 
     // Quantity: "QUANTITY:620 IT"
-    m = raw.match(/QUANTITY:([^"\\\x00-\x1f]{1,25})/i);
+    m = raw.match(/QUANTITY:([^"\\\^\x00-\x1f]{1,25})/i);
     if (m) fields.quantity = m[1].trim();
 
     // Date line: binary has duplicate "BEST INSTALLED BY" entries that garble extraction.
@@ -521,7 +522,7 @@
     fields.date = 'MM-YYYY';
 
     // Staff number placeholder
-    m = raw.match(/STAFF\s+NO\.\s*:\s*([^"\\\x00-\x1f]{0,20})/i);
+    m = raw.match(/STAFF\s+NO\.\s*:\s*([^"\\\^\x00-\x1f]{0,20})/i);
     if (m) fields.staff = m[1].trim();
 
     // Footer
@@ -537,21 +538,31 @@
     return fields;
   }
 
+  // Strip ^ and control characters from binary-extracted text so they can't corrupt ZPL tokens.
+  // Binary files read as text often contain byte 0x5E (^) which the ZPL tokenizer treats as
+  // a command separator — if embedded in a text field it injects accidental ZPL commands.
+  function sanitizeZPL(s) {
+    if (!s) return '';
+    return s.replace(/\^/g, '').replace(/[\x00-\x1f\x7f-\x9f]/g, '').trim();
+  }
+
   // Generate ZPL from extracted NiceLabel content
   // Coordinates derived from binary decode of ZDesigner ZM400 200 Dpi (ZPL) label file:
   //   Text left margin x=104, rows at y=46,111,176,241,306,371,436,500 (65-dot spacing)
   //   Date variable (MM-YYYY) at x=1017,y=304; Staff value at x=611,y=367
-  //   Label: 6"×3" = 1200×600 dots at 200 DPI
+  //   Label: 6.52"×2.7" = 1304×540 dots at 200 DPI (ZM400)
   function niceLabelToZPL(fields) {
-    var company  = fields.company  || 'DURACELL(CHINA)LTD.';
-    var battery  = fields.battery  ? 'BATTERY: ' + fields.battery : 'BATTERY:';
-    var sku      = fields.sku      ? 'SKU No.: ' + fields.sku + (fields.sap ? '  /SAP: ' + fields.sap : '') : 'SKU No.:';
-    var quantity = fields.quantity ? 'QUANTITY: ' + fields.quantity : 'QUANTITY:';
-    var dateVal  = fields.date     || 'MM-YYYY';
-    var staffVal = fields.staff    || 'XXXX8511XX';
-    var footer   = fields.footer   || 'MADE IN CHINA';
-    var bcData   = (fields.barcodeData && !/^X/.test(fields.barcodeData)) ? fields.barcodeData
-                   : (fields.sap || '0000000');
+    var company  = sanitizeZPL(fields.company)  || 'DURACELL(CHINA)LTD.';
+    var battery  = fields.battery  ? 'BATTERY: '  + sanitizeZPL(fields.battery)  : 'BATTERY:';
+    var sku      = fields.sku      ? 'SKU No.: '  + sanitizeZPL(fields.sku) +
+                                     (fields.sap  ? '  /SAP: ' + sanitizeZPL(fields.sap) : '') : 'SKU No.:';
+    var quantity = fields.quantity ? 'QUANTITY: ' + sanitizeZPL(fields.quantity) : 'QUANTITY:';
+    var dateVal  = sanitizeZPL(fields.date)     || 'MM-YYYY';
+    var staffVal = sanitizeZPL(fields.staff)    || 'XXXX8511XX';
+    var footer   = sanitizeZPL(fields.footer)   || 'MADE IN CHINA';
+    var bcData   = sanitizeZPL(fields.barcodeData) || sanitizeZPL(fields.sap) || '0000000';
+    // bcData must be digits only (Code128); fall back if sanitisation left non-digits
+    if (!/^\d+$/.test(bcData)) bcData = sanitizeZPL(fields.sap) || '0000000';
 
     return [
       '^XA',
