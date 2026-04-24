@@ -6,7 +6,6 @@
 <title>ZPL Preview</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
-
   body {
     font-family: 'Segoe UI', sans-serif;
     background: #f4f6f9;
@@ -17,41 +16,25 @@
     min-height: 100vh;
     padding: 16px;
   }
-
-  #preview-wrap {
+  #label-wrap {
     background: #fff;
     border-radius: 10px;
-    box-shadow: 0 2px 16px rgba(0,0,0,0.1);
-    padding: 12px;
-    max-width: 100%;
-    text-align: center;
+    box-shadow: 0 2px 16px rgba(0,0,0,0.12);
+    padding: 14px;
+    display: inline-block;
   }
-
-  #preview-wrap img {
-    max-width: 100%;
-    display: block;
-    border-radius: 4px;
+  #label-surface {
+    position: relative;
+    background: #ffffff;
+    border: 1px solid #e5e7eb;
+    overflow: hidden;
   }
-
   .msg {
     color: #6b7280;
     font-size: 13px;
-    padding: 40px 20px;
+    padding: 40px 24px;
     text-align: center;
   }
-
-  .msg .icon { font-size: 2rem; margin-bottom: 8px; }
-
-  .spinner {
-    width: 36px; height: 36px;
-    border: 4px solid #e5e7eb;
-    border-top-color: #1a3a5c;
-    border-radius: 50%;
-    animation: spin .8s linear infinite;
-    margin: 30px auto 10px;
-  }
-  @keyframes spin { to { transform: rotate(360deg); } }
-
   .error-box {
     background: #fef2f2;
     border: 1px solid #fecaca;
@@ -59,78 +42,249 @@
     padding: 16px 20px;
     color: #dc2626;
     font-size: 13px;
-    max-width: 320px;
+    max-width: 340px;
     text-align: center;
+    word-break: break-word;
   }
-  .error-box .icon { font-size: 1.6rem; margin-bottom: 6px; }
+  /* QR code img auto-size fix */
+  #label-surface img { display: block; }
 </style>
 </head>
 <body>
 
-<div id="preview-wrap">
-  <div class="msg">
-    <div class="spinner"></div>
-    <div>Rendering label…</div>
+<div id="label-wrap">
+  <div id="label-surface">
+    <div class="msg">Rendering…</div>
   </div>
 </div>
 
+<!-- JsBarcode: Code 128, Code 39, EAN, etc. -->
+<script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js"></script>
+<!-- QRCode.js -->
+<script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
+
 <script>
 (function () {
-  // Read ZPL from ?zpl= query parameter
-  var params  = new URLSearchParams(window.location.search);
-  var zpl     = params.get('zpl') || '';
-  var dpi     = params.get('dpi')    || '8dpmm';   // 6dpmm | 8dpmm | 12dpmm | 24dpmm
-  var width   = params.get('width')  || '4';        // label width in inches
-  var height  = params.get('height') || '6';        // label height in inches
-  var wrap    = document.getElementById('preview-wrap');
 
+  /* ── Read URL params ─────────────────────────────────────────────────────── */
+  var params  = new URLSearchParams(window.location.search);
+  var zpl     = (params.get('zpl') || '').trim();
+  var dpi     = parseFloat(params.get('dpi') || '8') * 25.4;   // dpmm → dpi  (8dpmm ≈ 203dpi)
+  var labelW  = parseFloat(params.get('width')  || '4');        // inches
+  var labelH  = parseFloat(params.get('height') || '6');        // inches
+  var surface = document.getElementById('label-surface');
+  var wrap    = document.getElementById('label-wrap');
+
+  /* ── Label dot dimensions ────────────────────────────────────────────────── */
+  var DOTS_W  = Math.round(labelW * dpi);   // e.g. 4 * 203 = 812
+  var DOTS_H  = Math.round(labelH * dpi);   // e.g. 6 * 203 = 1218
+
+  /* ── Display scale: fit inside 380px wide ────────────────────────────────── */
+  var DISP_W  = Math.min(380, window.innerWidth - 60);
+  var SCALE   = DISP_W / DOTS_W;
+  var DISP_H  = DOTS_H * SCALE;
+
+  surface.style.width  = DISP_W + 'px';
+  surface.style.height = DISP_H + 'px';
+
+  /* ── Error / empty states ────────────────────────────────────────────────── */
   function showError(msg) {
-    wrap.innerHTML =
-      '<div class="error-box">' +
-        '<div class="icon">⚠️</div>' +
-        '<strong>Preview unavailable</strong><br/>' +
-        '<span style="font-size:12px;color:#6b7280;">' + msg + '</span>' +
-      '</div>';
+    surface.innerHTML = '<div class="error-box">⚠️ ' + msg + '</div>';
+    surface.style.display = 'flex';
+    surface.style.alignItems = 'center';
+    surface.style.justifyContent = 'center';
   }
 
   if (!zpl) {
-    wrap.innerHTML =
-      '<div class="msg"><div class="icon">🏷️</div>No ZPL provided.<br/>' +
-      '<span style="font-size:11px;">Pass ?zpl=^XA...^XZ in the URL.</span></div>';
+    showError('No ZPL provided.<br><small>Add ?zpl=^XA...^XZ to the URL.</small>');
     return;
   }
 
-  // Call Labelary API (HTTPS to avoid mixed-content block)
-  var url = 'https://api.labelary.com/v1/printers/' + dpi + '/labels/' +
-            width + 'x' + height + '/0/';
+  if (!zpl.includes('^XA') && !zpl.includes('^xa')) {
+    showError('Invalid ZPL — must start with ^XA and end with ^XZ.');
+    return;
+  }
 
-  fetch(url, {
-    method:  'POST',
-    headers: {
-      'Accept':       'image/png',
-      'Content-Type': 'application/x-www-form-urlencoded'
-    },
-    body: 'file=' + encodeURIComponent(zpl)
-  })
-  .then(function (resp) {
-    if (!resp.ok) throw new Error('HTTP ' + resp.status);
-    return resp.blob();
-  })
-  .then(function (blob) {
-    // Convert blob → base64 data URL (works inside sandboxed iframes)
-    var reader = new FileReader();
-    reader.onload = function () {
-      var img = document.createElement('img');
-      img.src = reader.result;
-      img.alt = 'Label preview';
-      wrap.innerHTML = '';
-      wrap.appendChild(img);
-    };
-    reader.readAsDataURL(blob);
-  })
-  .catch(function (err) {
-    showError('Labelary API error: ' + err.message);
-  });
+  /* ── Clear and render ────────────────────────────────────────────────────── */
+  surface.innerHTML = '';
+  surface.style.display = 'block';
+
+  /* ── ZPL tokeniser ───────────────────────────────────────────────────────── */
+  // Split on every ^ that starts a new command (keep the ^)
+  var raw = zpl.replace(/\r/g, '').replace(/\n/g, '');
+  // Separate ^FD...^FS blocks first (field data can contain anything)
+  // Strategy: walk char by char, collect commands
+  var tokens = [];
+  var i = 0;
+  while (i < raw.length) {
+    if (raw[i] === '^') {
+      var end = raw.indexOf('^', i + 1);
+      if (end === -1) end = raw.length;
+      tokens.push(raw.substring(i, end));
+      i = end;
+    } else {
+      i++;
+    }
+  }
+
+  /* ── Render state ────────────────────────────────────────────────────────── */
+  var curX = 0, curY = 0;
+  var fontH = 30, fontW = 30;
+  var barcodeNext = null;   // { type, height, showText }
+  var qrNext = null;        // { size }
+
+  /* ── Helper: place an element absolutely ─────────────────────────────────── */
+  function place(el, x, y) {
+    el.style.position = 'absolute';
+    el.style.left     = (x * SCALE) + 'px';
+    el.style.top      = (y * SCALE) + 'px';
+    surface.appendChild(el);
+    return el;
+  }
+
+  /* ── Helper: parse comma-separated args after command code ───────────────── */
+  function args(tok, prefixLen) {
+    return tok.substring(prefixLen).split(',');
+  }
+
+  /* ── Process each token ──────────────────────────────────────────────────── */
+  tokens.forEach(function (tok) {
+    var upper = tok.toUpperCase();
+
+    /* Field Origin — sets current X, Y */
+    if (upper.startsWith('^FO')) {
+      var p = args(tok, 3);
+      curX = parseFloat(p[0]) || 0;
+      curY = parseFloat(p[1]) || 0;
+      return;
+    }
+
+    /* Font — ^A0N,height,width  or  ^AN,height  etc. */
+    if (upper.match(/^\^A[0-9A-Z][NnBbRrLl]?,?/)) {
+      var stripped = tok.replace(/^\^A[0-9A-Za-z][NnBbRrLl]?,?/, '');
+      var p = stripped.split(',');
+      fontH = parseFloat(p[0]) || 30;
+      fontW = parseFloat(p[1] || p[0]) || fontH;
+      return;
+    }
+
+    /* Graphic Box — ^GBwidth,height,thickness */
+    if (upper.startsWith('^GB')) {
+      var p = args(tok, 3);
+      var gw = parseFloat(p[0]) || 1;
+      var gh = parseFloat(p[1]) || 1;
+      var gt = parseFloat(p[2]) || 1;
+      var el = document.createElement('div');
+      el.style.width      = (gw * SCALE) + 'px';
+      el.style.height     = (Math.max(gh, gt) * SCALE) + 'px';
+      el.style.background = '#000';
+      place(el, curX, curY);
+      return;
+    }
+
+    /* Code 128 Barcode — ^BCN,height,showText,... */
+    if (upper.startsWith('^BC')) {
+      var stripped = tok.replace(/^\^BC[NnBbRrLl]?,?/i, '');
+      var p = stripped.split(',');
+      barcodeNext = {
+        type:     'CODE128',
+        height:   parseFloat(p[0]) || 100,
+        showText: (p[1] || 'Y').toUpperCase() !== 'N'
+      };
+      return;
+    }
+
+    /* Code 39 Barcode — ^B3 */
+    if (upper.startsWith('^B3')) {
+      var stripped = tok.replace(/^\^B3[NnBbRrLl]?,?/i, '');
+      var p = stripped.split(',');
+      barcodeNext = {
+        type:     'CODE39',
+        height:   parseFloat(p[1]) || 100,
+        showText: (p[2] || 'Y').toUpperCase() !== 'N'
+      };
+      return;
+    }
+
+    /* QR Code — ^BQN,model,magnification */
+    if (upper.startsWith('^BQ')) {
+      var stripped = tok.replace(/^\^BQ[NnBbRrLl]?,?/i, '');
+      var p = stripped.split(',');
+      var mag = parseFloat(p[1]) || 5;
+      qrNext = { size: Math.round(mag * 10 * SCALE) };
+      return;
+    }
+
+    /* Field Data — ^FDdata  (ends at next ^ which our tokeniser already handled) */
+    if (upper.startsWith('^FD')) {
+      var text = tok.substring(3).replace(/\^FS$/i, '').trim();
+      var snapX = curX, snapY = curY;
+
+      /* ── Barcode ── */
+      if (barcodeNext) {
+        var bc = barcodeNext;
+        barcodeNext = null;
+        var svgEl = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        place(svgEl, snapX, snapY);
+        try {
+          JsBarcode(svgEl, text, {
+            format:       bc.type,
+            height:       bc.height * SCALE,
+            width:        Math.max(1.2, SCALE * 2),
+            displayValue: bc.showText,
+            fontSize:     Math.round(10 * SCALE),
+            margin:       2,
+            background:   '#ffffff',
+            lineColor:    '#000000'
+          });
+        } catch (e) {
+          svgEl.remove();
+          var fb = document.createElement('div');
+          fb.style.cssText = 'font-size:' + (10 * SCALE) + 'px;color:#dc2626;';
+          fb.textContent = '[Barcode err: ' + e.message + ']';
+          place(fb, snapX, snapY);
+        }
+        return;
+      }
+
+      /* ── QR Code ── */
+      if (qrNext) {
+        var qr = qrNext;
+        qrNext = null;
+        var qrData = text.startsWith('QA,') ? text.substring(3) : text;
+        var qrDiv = document.createElement('div');
+        place(qrDiv, snapX, snapY);
+        try {
+          new QRCode(qrDiv, {
+            text:          qrData,
+            width:         qr.size,
+            height:        qr.size,
+            correctLevel:  QRCode.CorrectLevel.M
+          });
+        } catch (e) {
+          qrDiv.textContent = '[QR err]';
+        }
+        return;
+      }
+
+      /* ── Plain text ── */
+      var el = document.createElement('div');
+      el.style.cssText =
+        'position:absolute;' +
+        'left:'        + (snapX * SCALE) + 'px;' +
+        'top:'         + (snapY * SCALE) + 'px;' +
+        'font-family:Arial,Helvetica,sans-serif;' +
+        'font-size:'   + (fontH * SCALE) + 'px;' +
+        'color:#000000;' +
+        'white-space:nowrap;' +
+        'line-height:1;';
+      el.textContent = text;
+      surface.appendChild(el);
+      return;
+    }
+
+  }); // end tokens.forEach
+
 })();
 </script>
 </body>
