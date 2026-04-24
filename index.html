@@ -282,7 +282,8 @@
 (function () {
 
   /* ── State ──────────────────────────────────────────────────────────────── */
-  var currentZPL = '';
+  var currentZPL      = '';
+  var currentFilename = '';
   var surface    = document.getElementById('label-surface');
   var sizeHint   = document.getElementById('size-hint');
   var editor     = document.getElementById('zplEditor');
@@ -348,11 +349,12 @@
   function loadZPL(content, filename) {
     var cleaned = content.trim();
 
-    currentZPL   = cleaned;
-    editor.value = cleaned;
+    currentZPL      = cleaned;
+    currentFilename = filename || '';
+    editor.value    = cleaned;
     document.getElementById('fileInfo').textContent = filename || 'Loaded file';
 
-    var fmt = detectFormat(cleaned);
+    var fmt = detectFormat(cleaned, currentFilename);
 
     if (fmt === 'NICELABEL_BIN') {
       // NiceLabel binary: detect printer DPI and pre-set label size
@@ -445,19 +447,23 @@
   /* ══════════════════════════════════════════════════════════════════════════
      FORMAT DETECTION
   ══════════════════════════════════════════════════════════════════════════ */
-  function detectFormat(content) {
+  function detectFormat(content, filename) {
     var t = content.trim();
     var u = t.toUpperCase();
     if (u.includes('^XA'))                          return 'ZPL';
-    // NiceLabel binary OLE2 document (.lbl created by NiceLabel Designer)
-    if (t.includes('NICELbl') || t.includes('NicePower') || t.includes('NICELbl64'))
-                                                    return 'NICELABEL_BIN';
     if (u.includes('<?XML') || u.includes('<LABEL') ||
         u.includes('<NICEFORM') || u.includes('<NICELABEL')) return 'NICELABEL_XML';
-    // EPL2: lines start with N / A / B / P / q / Q / R / ZT
+    // EPL2: lines start with N / A / B / P / q / Q / R
     if (/^[NnPpRr]\s*$|^[Aqq]\d/m.test(t))         return 'EPL2';
     // CPCL: starts with ! 0
     if (t.startsWith('! 0'))                        return 'CPCL';
+    // NiceLabel binary OLE2 document (.lbl from NiceLabel Designer)
+    // "NicePower" is stored as ANSI in the file — survives UTF-8 readAsText
+    // Wide-char strings like "NICELbl64" have null bytes and won't match plain includes()
+    if (t.includes('NicePower') || t.includes('ZebraDesigner') ||
+        content.includes('NICELbl') || content.includes('NicePower')) return 'NICELABEL_BIN';
+    // Fallback: .lbl or .nlbl extension with no recognised label language = NiceLabel binary
+    if (filename && /\.(lbl|nlbl)$/i.test(filename)) return 'NICELABEL_BIN';
     return 'UNKNOWN';
   }
 
@@ -465,80 +471,62 @@
      NICELABEL BINARY EXTRACTOR + RENDERER
   ══════════════════════════════════════════════════════════════════════════ */
 
-  // Scan binary content for readable ASCII strings and classify them
+  // Directly search the raw binary content for known label field patterns
   function extractNiceLabelContent(raw) {
-    // Pull out all printable ASCII sequences of 3+ chars
-    var re = /[ -~]{3,}/g;
-    var match, allStrings = [];
-    while ((match = re.exec(raw)) !== null) {
-      var s = match[0].trim();
-      if (s.length >= 3) allStrings.push(s);
-    }
-
-    // Deduplicate, keeping first occurrence
-    var seen = {}, unique = [];
-    allStrings.forEach(function(s) { if (!seen[s]) { seen[s]=true; unique.push(s); } });
-
-    // Discard structural / tooling strings
-    var structural = /NICELbl|NicePower|ZebraDesigner|ZDesigner|winspool|Arial|obsolete|
-Root Entry|Contents|SummaryInformation|DocumentSummary|OcDocument|OEMData|V3 Data|
-V26 Data|V21|V31|V40|V41|V50|V51|V52|V53|V54|V60|V61|V32|V33|V36|RFID|Barcode.*Preferred|
-Marker Line|Barcode Mils|Barcode Codepage|Serial number|Integrations|NiceForm|
-Pick List|Unicode|Infoglyph|Maxi code|GuideLine|Epson support|Variable height|
-Australian|Intelligent mail|GS1|Rich Text|store.*recall|Date.*roll|USPS|Royal mail|
-ActiveX|Cutter support|Grouping|Double side|Multicolor|EPC|Stock func|comma.*separ|
-Major version|Improved|Implemented|Updated|supported|functionality|implemented|
-Merge graphics|sgpp555|NICELabel|date.*time|Diagonal|Electronic|Product Supervision|
-variable.*size|Variable.*size|Saving of compress|enhanced|added|changed|was implement/i;
-
-    var filtered = unique.filter(function(s) {
-      if (structural.test(s)) return false;
-      if (/^[=\+\/\*\-_\s#@%^&]{3,}$/.test(s)) return false; // symbol garbage
-      if (/^[0-9a-f]{8,}$/i.test(s)) return false; // hex blobs
-      if (s.length > 120) return false; // very long = binary artifact
-      return true;
-    });
-
-    // Identify key label fields by pattern matching
     var fields = {
       company: null, battery: null, sku: null, sap: null,
       quantity: null, date: null, staff: null,
       footer: null, barcodeData: null, barcodeType: 'CODE128',
-      printer: null, extras: []
+      printer: null
     };
+    var m;
 
-    filtered.forEach(function(s) {
-      var u = s.toUpperCase();
-      if (/^DURACELL/.test(s)) { fields.company = s; return; }
-      if (/^BATTERY:/i.test(s)) { fields.battery = s.replace(/^BATTERY:/i,'').trim(); return; }
-      if (/^SKU\s*No\./i.test(s)) {
-        var m = s.match(/SKU\s*No\.\s*:?\s*([^\s\/]+)/i);
-        if (m) fields.sku = m[1];
-        var sapM = s.match(/SAP\s*:?\s*(\d{5,})/i);
-        if (sapM) fields.sap = sapM[1];
-        return;
-      }
-      if (/^QUANTITY:/i.test(s)) { fields.quantity = s.replace(/^QUANTITY:/i,'').trim(); return; }
-      if (/^BEST\s+INSTALLED/i.test(s)) { fields.date = s; return; }
-      if (/^STAFF\s+NO\./i.test(s)) {
-        var m = s.match(/STAFF\s*NO\.\s*:?\s*(.*)/i);
-        fields.staff = m ? m[1].trim() : ''; return;
-      }
-      if (/^MADE\s+IN\s+CHINA/i.test(s)) { fields.footer = s; return; }
-      if (/^PACKING\s+DATE/i.test(s)) { return; } // label
-      if (/^Code\d+$|^CODE128$|^CODE39$|^EAN/i.test(s)) {
-        fields.barcodeType = s.toUpperCase().replace(/^Code/i,'CODE'); return;
-      }
-      // SAP number standalone
-      if (/^\d{7}$/.test(s) && !fields.sap) { fields.sap = s; return; }
-      // Barcode data: looks like 10+ digit number or XXX placeholders
-      if (/^X+(\s*X+)*$/.test(s) || (/^\d{10,}$/.test(s))) { fields.barcodeData = s; return; }
-      if (s.length < 60 && /[A-Za-z]/.test(s)) fields.extras.push(s);
-    });
+    // Printer name (stored as ANSI in DEVMODE block — always readable)
+    m = raw.match(/ZDesigner\s+\w+\s+\d+\s+dpi\s+\(ZPL\)/);
+    if (!m) m = raw.match(/ZDesigner\s+\S+\s+\S+\s+\(ZPL\)/);
+    if (m) fields.printer = m[0];
 
-    // Find printer info
-    var printerM = raw.match(/ZDesigner[\s\w]+(?:ZPL|EPL2)/);
-    if (printerM) fields.printer = printerM[0];
+    // Company name
+    m = raw.match(/DURACELL[\w()]+(?:\s[\w.]+)*/);
+    if (m) fields.company = m[0].trim();
+
+    // Battery type: "BATTERY:MX1500 CELL"
+    m = raw.match(/BATTERY:([^"\\\x00-\x1f]{1,40})/i);
+    if (m) fields.battery = m[1].trim();
+
+    // SKU: "SKU No.:OHMX15HBKUS/SAP:"
+    m = raw.match(/SKU\s*No\.\s*:([^"\\\x00-\x1f]{1,60})/i);
+    if (m) {
+      var skuM = m[1].match(/([A-Z0-9]{5,})/i);
+      if (skuM) fields.sku = skuM[1];
+    }
+
+    // SAP number: appears after "SAP:" or as standalone 7-digit number
+    m = raw.match(/SAP:\s*(\d+)/i) || raw.match(/\/SAP:\s*(\d+)/i);
+    if (m) fields.sap = m[1];
+    if (!fields.sap) { m = raw.match(/\b(\d{7})\b/); if (m) fields.sap = m[1]; }
+
+    // Quantity: "QUANTITY:620 IT"
+    m = raw.match(/QUANTITY:([^"\\\x00-\x1f]{1,25})/i);
+    if (m) fields.quantity = m[1].trim();
+
+    // Date line: "BEST INSTALLED BY MM-YYYY"
+    m = raw.match(/BEST\s+INSTALLED\s+BY([^"\\\x00-\x1f]{0,20})/i);
+    if (m) fields.date = 'BEST INSTALLED BY ' + m[1].trim();
+
+    // Staff number placeholder
+    m = raw.match(/STAFF\s+NO\.\s*:\s*([^"\\\x00-\x1f]{0,20})/i);
+    if (m) fields.staff = m[1].trim();
+
+    // Footer
+    if (/MADE\s+IN\s+CHINA/i.test(raw)) fields.footer = 'MADE IN CHINA';
+
+    // Barcode type
+    m = raw.match(/\b(Code128|Code39|EAN13|EAN8|UPCA)\b/i);
+    if (m) fields.barcodeType = m[1].replace(/^[Cc]ode/, 'CODE');
+
+    // Barcode value = SAP number (most common for Duracell battery labels)
+    fields.barcodeData = fields.sap || '0000000';
 
     return fields;
   }
@@ -851,7 +839,7 @@ variable.*size|Variable.*size|Saving of compress|enhanced|added|changed|was impl
       return;
     }
 
-    var fmt = detectFormat(content);
+    var fmt = detectFormat(content, currentFilename);
 
     /* Show format badge */
     var badgeColors = {
