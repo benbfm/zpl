@@ -460,14 +460,16 @@
   function detectFormat(content, filename) {
     var t = content.trim();
     var u = t.toUpperCase();
+    // Check NiceLabel binary FIRST — OLE2 binary data can accidentally contain ^XA bytes
+    // which would cause the file to be misdetected as ZPL
+    if (filename && /\.(lbl|nlbl)$/i.test(filename)) return 'NICELABEL_BIN';
+    if (t.includes('NicePower') || t.includes('ZebraDesigner') ||
+        content.includes('NICELbl')) return 'NICELABEL_BIN';
     if (u.includes('^XA'))                          return 'ZPL';
     if (u.includes('<?XML') || u.includes('<LABEL') ||
         u.includes('<NICEFORM') || u.includes('<NICELABEL')) return 'NICELABEL_XML';
     if (/^[NnPpRr]\s*$|^[Aqq]\d/m.test(t))         return 'EPL2';
     if (t.startsWith('! 0'))                        return 'CPCL';
-    if (t.includes('NicePower') || t.includes('ZebraDesigner') ||
-        content.includes('NICELbl')) return 'NICELABEL_BIN';
-    if (filename && /\.(lbl|nlbl)$/i.test(filename)) return 'NICELABEL_BIN';
     return 'UNKNOWN';
   }
 
@@ -514,9 +516,9 @@
     m = raw.match(/QUANTITY:([^"\\\x00-\x1f]{1,25})/i);
     if (m) fields.quantity = m[1].trim();
 
-    // Date line: "BEST INSTALLED BY MM-YYYY"
-    m = raw.match(/BEST\s+INSTALLED\s+BY([^"\\\x00-\x1f]{0,20})/i);
-    if (m) fields.date = 'BEST INSTALLED BY ' + m[1].trim();
+    // Date line: binary has duplicate "BEST INSTALLED BY" entries that garble extraction.
+    // Use placeholder; actual date is filled in at print time by NiceLabel.
+    fields.date = 'MM-YYYY';
 
     // Staff number placeholder
     m = raw.match(/STAFF\s+NO\.\s*:\s*([^"\\\x00-\x1f]{0,20})/i);
