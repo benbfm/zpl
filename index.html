@@ -162,13 +162,17 @@
     border-radius: 10px;
     box-shadow: 0 2px 16px rgba(0,0,0,0.12);
     padding: 14px;
-    display: inline-block;
+    display: block;
+    width: 100%;
+    max-width: calc(100vw - 28px);
+    overflow-x: auto;   /* horizontal scroll for wide labels at 100% scale */
+    box-sizing: border-box;
   }
   #label-surface {
     position: relative;
     background: #fff;
     border: 1px solid #e5e7eb;
-    overflow: hidden;
+    overflow: visible;  /* don't clip at 100% scale */
   }
 
   /* ── Size hint ── */
@@ -828,16 +832,18 @@
 
     var DOTS_W = Math.round(labelW * dpi);
     var DOTS_H = Math.round(labelH * dpi);
-    var DISP_W = Math.min(420, window.innerWidth - 56);
-    var SCALE  = DISP_W / DOTS_W;
-    var DISP_H = Math.round(DOTS_H * SCALE);
+    // Render at 100% scale: 1 dot = 1 pixel.  The label-wrap container scrolls
+    // horizontally if the label is wider than the viewport.
+    var DISP_W = DOTS_W;
+    var SCALE  = 1.0;
+    var DISP_H = DOTS_H;
 
     surface.style.width = DISP_W + 'px'; surface.style.height = DISP_H + 'px';
     surface.style.display = 'block'; surface.style.alignItems = '';
     surface.style.justifyContent = ''; surface.innerHTML = '';
 
     sizeHint.textContent = labelW + '" × ' + labelH + '" · ' +
-      DOTS_W + '×' + DOTS_H + ' dots · ' + (SCALE * 100).toFixed(0) + '% scale';
+      DOTS_W + '×' + DOTS_H + ' dots · 100% scale (1 dot = 1 px)';
 
     function showError(msg) {
       surface.innerHTML = '<div class="error-box">⚠️ ' + msg + '</div>';
