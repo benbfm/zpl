@@ -2874,8 +2874,17 @@ async function startCamera() {
     // ── Step 1: acquire stream (inside user-gesture call stack on all browsers) ──
     // facingMode:{ideal:'environment'} is a SOFT constraint — never throws
     // OverconstrainedError even when there is only a front camera.
+    // width/height: ideal = preferred, max = hard cap.
+    // Without max, a >2 K / high-DPI Android phone can deliver its native 4 K
+    // camera frame.  At 3840×2160 the Quagga2 toDataURL call takes 1–3 s per
+    // tick, collapsing the effective scan rate to near-zero.
+    // 1280×720 is more than sufficient for barcode detection.
     Scan.cameraStream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: {ideal:'environment'}, width: {ideal:1280}, height: {ideal:720} }
+      video: {
+        facingMode: { ideal: 'environment' },
+        width:  { ideal: 1280, max: 1920 },
+        height: { ideal:  720, max: 1080 }
+      }
     });
 
     // ── Step 2: attach stream ────────────────────────────────────────────────
@@ -2899,12 +2908,21 @@ async function startCamera() {
       });
     }
 
-    // ── Step 4b: wait for currentTime > 0 (at least one frame decoded) ──────────
-    // readyState ≥ 2 means the browser has frame *metadata*, but on Android Chrome
-    // the hardware camera pipeline may not have delivered the first actual pixel
-    // frame yet.  video.currentTime stays at 0 until the first frame is rendered.
-    // BarcodeDetector.detect() called on a currentTime=0 video returns empty
-    // results even though readyState reports "ready".  Poll for up to 2 s.
+    // ── Step 5: show camera UI immediately so user sees the live feed ───────────
+    // (Step 4b currentTime poll runs AFTER video is visible — avoids a blank
+    //  "Starting camera…" freeze while waiting for the first hardware frame.)
+    video.style.display  = 'block';
+    ph.style.display     = 'none';
+    finder.style.display = '';
+    btn.textContent      = T('scan.cam.stop') || '⏹ Stop Camera';
+    Scan.cameraRunning   = true;
+    camSt.textContent    = '🎥 Camera active — point barcode at the finder box';
+
+    // ── Step 5b: wait for currentTime > 0 with video already visible ─────────
+    // readyState ≥ 2 confirms frame metadata, but on Android Chrome the hardware
+    // camera pipeline may not have delivered the first actual pixel frame yet.
+    // BarcodeDetector.detect() on a currentTime=0 video consistently returns [].
+    // Poll for up to 2 s; the user can already see the live feed during this wait.
     if (video.currentTime === 0) {
       await new Promise(resolve => {
         const deadline = Date.now() + 2000;
@@ -2915,51 +2933,39 @@ async function startCamera() {
       });
     }
 
-    // ── Step 5: show camera UI ───────────────────────────────────────────────
-    video.style.display  = 'block';
-    ph.style.display     = 'none';
-    finder.style.display = '';
-    btn.textContent      = T('scan.cam.stop') || '⏹ Stop Camera';
-    Scan.cameraRunning   = true;
-    camSt.textContent    = '🎥 Camera active — point barcode at the finder box';
-
     // ── Step 6: initialise decoder ───────────────────────────────────────────
+    // Race-condition guard: if the user navigated away while we were waiting
+    // (steps 4a / 5b), stopCamera() will have set cameraRunning=false.
+    // Abort initialisation — do not start the scan loop on a dead stream.
+    if (!Scan.cameraRunning) return;
+
     if (hasBD) {
-      // On Android Chrome, BarcodeDetector.getSupportedFormats() tells us which
-      // formats this device/build actually supports.  Passing an unsupported format
-      // to the constructor causes it to throw or silently mis-behave on some builds.
+      // Query which formats this device/build supports.  Case-insensitive
+      // comparison handles Android builds that return "CODE_128" (uppercase).
       const wantedFormats = ['qr_code','code_128','code_39','code_93','ean_13','ean_8',
                              'upc_a','upc_e','data_matrix','pdf417','aztec','itf'];
       let formats = wantedFormats;
       try {
         const supported = await BarcodeDetector.getSupportedFormats();
         if (supported && supported.length > 0) {
-          // Case-insensitive comparison: some Android builds return "CODE_128" (uppercase)
-          // while the spec and our list use "code_128" (lowercase).  A direct .includes()
-          // would miss these, leaving formats empty and passing all formats to constructor.
           const supportedLower = supported.map(s => s.toLowerCase());
           formats = wantedFormats.filter(f => supportedLower.includes(f.toLowerCase()));
         }
-        if (formats.length === 0) formats = wantedFormats;  // last-resort: try all
-        console.log('[BarcodeDetector] supported formats on this device:', supported);
-        console.log('[BarcodeDetector] using formats:', formats);
-      } catch (_) {
-        // getSupportedFormats() not available on this build — proceed with all formats
-      }
+        if (formats.length === 0) formats = wantedFormats;
+        console.log('[BarcodeDetector] supported:', supported, '→ using:', formats);
+      } catch (_) { /* getSupportedFormats not available — try all */ }
       try {
         Scan.cameraDetector = new BarcodeDetector({ formats });
       } catch (bdErr) {
-        // Constructor threw (e.g. unsupported format on this build) — fall back to ZXing
-        console.warn('[BarcodeDetector] constructor failed, falling back to ZXing:', bdErr);
+        // Constructor failed — fall straight through to software Path B
+        console.warn('[BarcodeDetector] constructor failed, using software decoder:', bdErr);
         Scan.cameraDetector = null;
-        if (hasZX) Scan.zxingReader = new ZXing.BrowserMultiFormatReader();
       }
-    } else {
-      Scan.zxingReader = new ZXing.BrowserMultiFormatReader();
     }
-    Scan._tickCount = 0;
-
-    Scan._decoding = false;
+    // If hasBD is false OR constructor failed, cameraDetector stays null → Path B
+    Scan._tickCount   = 0;
+    Scan._bdFailCount = 0;
+    Scan._decoding    = false;
 
     // ── Step 7: start decode loop (setInterval — predictable timing) ─────────
     Scan.scanTimer = setInterval(scanFrameTick, 250);
@@ -2979,20 +2985,22 @@ async function startCamera() {
 
 // ── Decode loop tick (runs every 250 ms via setInterval) ──────────────────
 //
-// Two-path strategy — each path uses a different input to its decoder:
+// Two-path strategy:
 //
-// Path A — BarcodeDetector:  detect(videoElement) — native GPU path.
-//   On Android Chrome, video frames are GPU-decoded; copying them to a CPU-side
-//   canvas via drawImage() often produces a black frame.  detect(video) bypasses
-//   that copy and reads the GPU frame natively.  On iOS Safari 17+, it also
-//   works natively even though video.videoWidth is 0.
+// Path A — BarcodeDetector (Chrome 90+ / Edge / Safari 17+ / Android Chrome):
+//   detect(videoElement) — native GPU path.  The browser reads the hardware
+//   video frame directly, bypassing the CPU-side canvas 2D pipeline.
+//   After 20 consecutive empty results (~5 s) the decoder automatically falls
+//   through to Path B (format not supported by the native implementation).
 //
-// Path B — ZXing:  decodeFromCanvas(canvas) — explicit canvas capture.
-//   ZXing.decode(video) internally uses video.videoWidth to size its canvas.
-//   On iOS Safari, videoWidth is 0 on MediaStreams → 0×0 canvas → blank frame
-//   → NotFoundException every tick.  Fix: we draw to our own canvas using
-//   offsetWidth/offsetHeight as dimension fallback, then pass it to
-//   decodeFromCanvas() which skips ZXing's internal canvas-sizing code.
+// Path B — Software decoder (jsQR + Quagga2):
+//   Used when BarcodeDetector is absent, failed to init, or fell back.
+//   We capture the current frame to an offscreen canvas using offsetWidth/
+//   offsetHeight as a dimension fallback (iOS Safari reports videoWidth=0
+//   on live MediaStreams).  Then:
+//     • jsQR   — synchronous, QR codes only (fast, ~65 KB)
+//     • Quagga2 — async via decodeSingle(), 1-D formats: Code128, Code39,
+//                 EAN-8/13, UPC-A/E, ITF, Codabar, Code93
 function scanFrameTick() {
   if (!Scan.cameraRunning || Scan._decoding) return;
 
@@ -3034,23 +3042,21 @@ function scanFrameTick() {
             onBarcodeFound(codes[0].rawValue);
           } else {
             // BarcodeDetector returned empty — track consecutive misses.
-            // After 40 frames (~10 s) with no result, the native detector likely
-            // doesn't support the format being scanned (e.g. Code128 on some
-            // Android builds).  Automatically fall back to ZXing.js which supports
-            // a wider range of formats via a JavaScript decoder.
+            // After 20 frames (~5 s at 250 ms/tick) with no result, the native
+            // detector likely doesn't support this barcode format.
+            // Automatically switch to the software decoder (jsQR + Quagga2).
             Scan._bdFailCount++;
-            if (Scan._bdFailCount >= 40 && typeof ZXing !== 'undefined' && Scan.cameraRunning) {
+            if (Scan._bdFailCount >= 20 && Scan.cameraRunning) {
               console.warn('[BarcodeDetector] ' + Scan._bdFailCount +
-                ' consecutive empty results — switching to ZXing fallback');
-              Scan.cameraDetector = null;
-              Scan.zxingReader    = new ZXing.BrowserMultiFormatReader();
+                ' consecutive empty results — switching to software decoder');
+              Scan.cameraDetector = null;  // null → next tick uses Path B
               Scan._bdFailCount   = 0;
               $('scan-cam-status').textContent =
                 '🔍 Switched to software decoder — keep barcode steady…';
             }
           }
         } finally {
-          Scan._decoding = false;  // always release mutex, even if onBarcodeFound throws
+          Scan._decoding = false;
         }
       })
       .catch(err => {
@@ -3058,42 +3064,67 @@ function scanFrameTick() {
         console.warn('[BarcodeDetector] detect() error:', err?.name, err?.message);
       });
 
-  } else if (Scan.zxingReader) {
-    // ── Path B: ZXing (iOS Safari < 17, Firefox, older browsers) ────────────
+  } else {
+    // ── Path B: Software decoder — jsQR (QR codes) + Quagga2 (1-D barcodes) ──
     //
-    // ZXing.decode(video) uses video.videoWidth to size its internal canvas.
-    // On iOS Safari MediaStreams, videoWidth is always 0 → 0×0 canvas → blank
-    // → NotFoundException on every tick.  Fix: we draw the frame to our own
-    // canvas using offsetWidth/offsetHeight as fallback, then call
-    // decodeFromCanvas() which bypasses ZXing's internal canvas sizing.
+    // Used when: BarcodeDetector is absent, constructor failed, or auto-fallback
+    // triggered after 20 consecutive empty native results.
     //
-    // decodeFromCanvas is `protected` in TypeScript but compiles to a regular
-    // prototype method in the UMD build — fully callable from JavaScript.
-    try {
-      const w = video.videoWidth  || video.offsetWidth  || 640;
-      const h = video.videoHeight || video.offsetHeight || 480;
-      if (!Scan.decodeCanvas) Scan.decodeCanvas = document.createElement('canvas');
-      if (Scan.decodeCanvas.width !== w || Scan.decodeCanvas.height !== h) {
-        Scan.decodeCanvas.width  = w;
-        Scan.decodeCanvas.height = h;
-      }
-      Scan.decodeCanvas.getContext('2d').drawImage(video, 0, 0, w, h);
-      let result;
-      if (typeof Scan.zxingReader.decodeFromCanvas === 'function') {
-        result = Scan.zxingReader.decodeFromCanvas(Scan.decodeCanvas);
-      } else {
-        // Unexpected: decodeFromCanvas absent in this ZXing build — fall back.
-        console.warn('[ZXing] decodeFromCanvas not available; falling back to decode(video)');
-        result = Scan.zxingReader.decode(video);
-      }
+    // Frame capture: draw to our own canvas using offsetWidth/offsetHeight as
+    // dimension fallback for iOS Safari where videoWidth is always 0 on
+    // MediaStreams.  On Android Chrome, canvas drawImage from a camera
+    // MediaStream DOES produce valid pixel data (unlike DRM video).
+    // Clamp canvas to 1280×720 max.  Even if getUserMedia delivers a frame
+    // larger than requested (high-DPI phones sometimes ignore the max hint),
+    // drawImage scales the full frame down to fit — preserving the whole
+    // barcode in the canvas.  Keeping the canvas small is critical: a 4 K
+    // source fed to Quagga2 via toDataURL takes 1–3 s to encode on mobile.
+    const rawW = video.videoWidth  || video.offsetWidth  || 640;
+    const rawH = video.videoHeight || video.offsetHeight || 480;
+    const w = Math.min(rawW, 1280);
+    const h = Math.min(rawH,  720);
+    if (!Scan.decodeCanvas) Scan.decodeCanvas = document.createElement('canvas');
+    if (Scan.decodeCanvas.width !== w || Scan.decodeCanvas.height !== h) {
+      Scan.decodeCanvas.width  = w;
+      Scan.decodeCanvas.height = h;
+    }
+    const ctx = Scan.decodeCanvas.getContext('2d');
+    // drawImage with explicit destination size scales the full video frame
+    // (even if its intrinsic resolution is larger) down to w×h.
+    ctx.drawImage(video, 0, 0, w, h);
+
+    // ── 1. jsQR — synchronous, QR codes only ────────────────────────────────
+    if (typeof jsQR !== 'undefined') {
+      try {
+        const px  = ctx.getImageData(0, 0, w, h);
+        const qr  = jsQR(px.data, w, h, { inversionAttempts: 'dontInvert' });
+        if (qr && Scan.cameraRunning) {
+          Scan._decoding = false;
+          onBarcodeFound(qr.data);
+          return;
+        }
+      } catch (_) {}
+    }
+
+    // ── 2. Quagga2 — async, 1-D barcodes (Code128, Code39, EAN, UPC …) ──────
+    if (typeof Quagga !== 'undefined') {
+      Quagga.decodeSingle({
+        numOfWorkers: 0,   // run in main thread — no Web Worker needed
+        locate:       true,
+        decoder: {
+          readers: ['code_128_reader','ean_reader','upc_reader',
+                    'code_39_reader','codabar_reader','i2of5_reader','code_93_reader']
+        },
+        src: Scan.decodeCanvas.toDataURL('image/png')
+      }, result => {
+        Scan._decoding = false;
+        if (result && result.codeResult && Scan.cameraRunning) {
+          onBarcodeFound(result.codeResult.code);
+        }
+      });
+    } else {
+      // No software decoder available at all
       Scan._decoding = false;
-      if (result && Scan.cameraRunning) onBarcodeFound(result.getText());
-    } catch (e) {
-      Scan._decoding = false;
-      // NotFoundException fires on every blank frame — expected, do not log.
-      if (e && e.name && e.name !== 'NotFoundException') {
-        console.warn('[ZXing] decode error:', e.name, e.message);
-      }
     }
   }
 }
@@ -3112,7 +3143,6 @@ function onBarcodeFound(val) {
 function stopCamera() {
   if (Scan.scanTimer)    { clearInterval(Scan.scanTimer); Scan.scanTimer = null; }
   if (Scan.cameraStream) { Scan.cameraStream.getTracks().forEach(t => t.stop()); Scan.cameraStream = null; }
-  if (Scan.zxingReader)  { try { Scan.zxingReader.reset(); } catch (_) {} Scan.zxingReader = null; }
   Scan.decodeCanvas = null;
 
   const video = $('scan-video');
