@@ -1361,8 +1361,10 @@ body.zh-mode [data-lang="zh"]{display:revert;}
 
 <div class="toast" id="toast"></div>
 
-<!-- ZXing barcode library — loaded BEFORE main script so hasZX check is reliable on slow mobile connections -->
-<script src="https://unpkg.com/@zxing/library@0.21.3/umd/index.min.js"></script>
+<!-- jsQR: pure-JS QR code reader (65 KB) — synchronous ImageData API, proven on Android/iOS -->
+<script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
+<!-- Quagga2: 1-D barcode reader — Code128, Code39, EAN, UPC, ITF, Codabar (runs in main thread, no workers) -->
+<script src="https://cdn.jsdelivr.net/npm/@ericblade/quagga2@1.2.6/dist/quagga.min.js"></script>
 
 <!-- ═══════════════════════════════════════════
      JAVASCRIPT — all app logic
@@ -2665,9 +2667,8 @@ const Scan = {
   varMap:         [],    // [{varName, type, value}]
   cameraStream:   null,
   cameraRunning:  false,
-  cameraDetector: null,  // BarcodeDetector instance (Path A)
-  zxingReader:    null,  // ZXing reader instance (Path B)
-  decodeCanvas:   null,  // offscreen canvas for frame capture (both paths)
+  cameraDetector: null,  // BarcodeDetector instance (Path A); null → Path B runs
+  decodeCanvas:   null,  // offscreen canvas for frame capture (Path B: jsQR + Quagga2)
   scanTimer:      null,  // setInterval handle for decode loop
   _decoding:      false, // mutex — prevents concurrent decode calls
   _tickCount:     0,     // frames attempted — shown in status so user can confirm loop is live
@@ -2857,9 +2858,9 @@ async function startCamera() {
   }
 
   const hasBD = 'BarcodeDetector' in window;
-  const hasZX = typeof ZXing !== 'undefined';
+  const hasSW = typeof jsQR !== 'undefined' || typeof Quagga !== 'undefined';
 
-  if (!hasBD && !hasZX) {
+  if (!hasBD && !hasSW) {
     $('no-barcode-api').style.display = '';
     return;
   }
