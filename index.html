@@ -515,6 +515,7 @@ body.zh-mode [data-lang="zh"]{display:revert;}
   <button class="nav-btn" id="nav-scan" onclick="nav('scan')" data-i18n="nav.scan">📷 Scan &amp; Print</button>
   <button class="nav-btn" id="nav-help" onclick="nav('help')" data-i18n="nav.help">❓ Help</button>
   <div class="nav-spacer"></div>
+  <span class="nav-version" id="nav-version-badge"></span>
   <button class="nav-btn" id="lang-btn" onclick="toggleLang()" data-i18n="lang.toggle" style="border:1px solid rgba(255,255,255,.4);padding:4px 12px;font-size:12px;">ZH 中文</button>
 </nav>
 
@@ -978,6 +979,7 @@ body.zh-mode [data-lang="zh"]{display:revert;}
         <h2>ZPL Label Designer</h2>
         <p data-lang="en">Design, save, and print ZPL barcode labels for Zebra printers. This guide covers everything you need — from first-time setup to daily printing.</p>
         <p data-lang="zh">为斑马打印机设计、保存并打印 ZPL 条码标签。本指南涵盖从初次配置到日常打印的全部操作。</p>
+        <p id="help-version-badge" style="margin-top:10px;font-size:12px;color:#8892c0;letter-spacing:.04em;"></p>
       </div>
 
       <!-- Workflow flow diagram -->
@@ -1624,6 +1626,10 @@ const S = {
   drag: { active: false, id: null, ox: 0, oy: 0 },
   resize: { active: false, id: null, ox: 0, oy: 0, ow: 0, oh: 0 },
 };
+
+// ─── VERSION ─────────────────────────────────────────────────
+const APP_VERSION = 'v1.26';   // bump this whenever a new build is deployed
+const APP_DATE    = '2026-04-29';
 
 // ─── HELPERS ─────────────────────────────────────────────────
 const $ = id => document.getElementById(id);
@@ -3181,6 +3187,14 @@ updateStats();
 (function(){ const el=$('var-wrap'); if(el && !el.children.length) el.innerHTML='<div style="color:var(--text2);font-size:13px;font-style:italic;">'+T('dyn.selFirst')+'</div>'; })();
 // Initialise DPI selector + hint
 updateDPIHint();
+// Stamp version number into nav bar (desktop) and help screen hero (all devices)
+(function(){
+  const badge = APP_VERSION + ' · ' + APP_DATE;
+  const nav   = $('nav-version-badge');
+  const help  = $('help-version-badge');
+  if (nav)  nav.textContent  = badge;
+  if (help) help.textContent = '🏷️ ' + badge;
+})();
 </script>
 
 </body>
