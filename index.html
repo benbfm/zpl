@@ -2668,11 +2668,12 @@ const Scan = {
   cameraStream:   null,
   cameraRunning:  false,
   cameraDetector: null,  // BarcodeDetector instance (Path A); null → Path B runs
+  imageCapture:   null,  // ImageCapture instance — grabFrame() returns CPU ImageBitmap
   decodeCanvas:   null,  // offscreen canvas for frame capture (Path B: jsQR + Quagga2)
   scanTimer:      null,  // setInterval handle for decode loop
   _decoding:      false, // mutex — prevents concurrent decode calls
   _tickCount:     0,     // frames attempted — shown in status so user can confirm loop is live
-  _bdFailCount:   0,     // consecutive BarcodeDetector empty results — triggers ZXing fallback
+  _bdFailCount:   0,     // consecutive BarcodeDetector empty results — triggers software fallback
 };
 
 // ── Core lookup ────────────────────────────────────────────────
@@ -2892,6 +2893,19 @@ async function startCamera() {
     // so iOS Safari auto-starts playback when srcObject is set.
     video.srcObject = Scan.cameraStream;
 
+    // ── Step 2b: init ImageCapture (Chrome 59+ / Android Chrome / iOS 17.4+) ─
+    // grabFrame() returns a CPU-accessible ImageBitmap, bypassing the GPU→CPU
+    // drawImage() copy that silently produces a black canvas on many Android
+    // devices (hardware-decoded video lives on the GPU; ctx.drawImage(video)
+    // fails to read it back on affected builds).
+    // ImageCapture is not available on every browser, so we guard with typeof.
+    try {
+      if (typeof ImageCapture !== 'undefined') {
+        const track = Scan.cameraStream.getVideoTracks()[0];
+        if (track) Scan.imageCapture = new ImageCapture(track);
+      }
+    } catch (_) { Scan.imageCapture = null; }
+
     // ── Step 3: call play() as a safety net ─────────────────────────────────
     // No-op if autoplay already started; swallow any error (already playing).
     try { await video.play(); } catch (_) {}
@@ -2985,147 +2999,137 @@ async function startCamera() {
 
 // ── Decode loop tick (runs every 250 ms via setInterval) ──────────────────
 //
-// Two-path strategy:
+// Frame acquisition strategy:
+//   PRIMARY  — ImageCapture.grabFrame() → returns a CPU-accessible ImageBitmap.
+//              Chrome 59+ / Android Chrome / iOS 17.4+.
+//              Bypasses the GPU→CPU drawImage copy that silently produces a
+//              black canvas on many Android devices (hardware-decoded video
+//              frames live on the GPU; ctx.drawImage(video) fails to read them
+//              back on affected Android Chrome builds).
+//   FALLBACK — direct <video> element (used when ImageCapture is unavailable).
 //
-// Path A — BarcodeDetector (Chrome 90+ / Edge / Safari 17+ / Android Chrome):
-//   detect(videoElement) — native GPU path.  The browser reads the hardware
-//   video frame directly, bypassing the CPU-side canvas 2D pipeline.
-//   After 20 consecutive empty results (~5 s) the decoder automatically falls
-//   through to Path B (format not supported by the native implementation).
-//
-// Path B — Software decoder (jsQR + Quagga2):
-//   Used when BarcodeDetector is absent, failed to init, or fell back.
-//   We capture the current frame to an offscreen canvas using offsetWidth/
-//   offsetHeight as a dimension fallback (iOS Safari reports videoWidth=0
-//   on live MediaStreams).  Then:
-//     • jsQR   — synchronous, QR codes only (fast, ~65 KB)
-//     • Quagga2 — async via decodeSingle(), 1-D formats: Code128, Code39,
-//                 EAN-8/13, UPC-A/E, ITF, Codabar, Code93
-function scanFrameTick() {
+// Two decode paths:
+//   Path A — BarcodeDetector (Chrome 90+ / Edge / Safari 17+ / Android Chrome):
+//              detect(bitmap|video) — native path.  After 20 consecutive empty
+//              results (~5 s) the decoder automatically falls through to Path B.
+//   Path B — Software: jsQR (QR codes, sync) + Quagga2 (1-D barcodes, async).
+//              Draws from the ImageBitmap (always valid pixels) or video element.
+async function scanFrameTick() {
   if (!Scan.cameraRunning || Scan._decoding) return;
 
   const video = $('scan-video');
   // readyState < 2 means no frame data yet (HAVE_NOTHING / HAVE_METADATA).
-  // readyState 2+ means at least one frame is available to read.
   if (!video || video.readyState < 2) return;
 
   Scan._decoding = true;
   Scan._tickCount++;
 
   // Show a live frame counter every ~1 s (every 4 ticks at 250 ms interval).
-  // This lets the user confirm the decode loop is actually running on their device.
   if (Scan._tickCount % 4 === 0) {
     $('scan-cam-status').textContent =
       '🔍 Scanning… (' + Scan._tickCount + ' frames checked)';
   }
 
-  if (Scan.cameraDetector) {
-    // ── Path A: BarcodeDetector (Android Chrome / Desktop Chrome / Safari 17+) ──
-    //
-    // IMPORTANT: pass the live <video> element directly, NOT a canvas snapshot.
-    //
-    // On Android Chrome, video frames are GPU-decoded. When you call
-    // ctx.drawImage(video, ...) on a CPU-side 2D canvas, the browser must
-    // copy the GPU frame back to CPU memory — on many Android devices this
-    // produces a black canvas instead of the actual frame.  BarcodeDetector
-    // .detect(videoElement) reads the GPU frame natively without that copy,
-    // which is exactly how the API is designed to be used on mobile.
-    //
-    // On iOS Safari 17+, detect(video) also works natively even though
-    // video.videoWidth reports 0 — the browser accesses the video frame
-    // internally without going through the JS videoWidth property.
-    Scan.cameraDetector.detect(video)
-      .then(codes => {
-        try {
-          if (codes.length > 0 && Scan.cameraRunning) {
-            Scan._bdFailCount = 0;
-            onBarcodeFound(codes[0].rawValue);
-          } else {
-            // BarcodeDetector returned empty — track consecutive misses.
-            // After 20 frames (~5 s at 250 ms/tick) with no result, the native
-            // detector likely doesn't support this barcode format.
-            // Automatically switch to the software decoder (jsQR + Quagga2).
-            Scan._bdFailCount++;
-            if (Scan._bdFailCount >= 20 && Scan.cameraRunning) {
-              console.warn('[BarcodeDetector] ' + Scan._bdFailCount +
-                ' consecutive empty results — switching to software decoder');
-              Scan.cameraDetector = null;  // null → next tick uses Path B
-              Scan._bdFailCount   = 0;
-              $('scan-cam-status').textContent =
-                '🔍 Switched to software decoder — keep barcode steady…';
-            }
-          }
-        } finally {
-          Scan._decoding = false;
-        }
-      })
-      .catch(err => {
-        Scan._decoding = false;
-        console.warn('[BarcodeDetector] detect() error:', err?.name, err?.message);
-      });
+  // ── Acquire a CPU-accessible frame via ImageCapture.grabFrame() ──────────
+  // grabFrame() returns an ImageBitmap decoded on the CPU, which is always
+  // readable by canvas 2D getImageData — unlike drawImage(video) which can
+  // produce an all-black canvas on Android when the video frame lives on the GPU.
+  let bitmap = null;
+  if (Scan.imageCapture) {
+    try { bitmap = await Scan.imageCapture.grabFrame(); } catch (_) {}
+  }
 
-  } else {
-    // ── Path B: Software decoder — jsQR (QR codes) + Quagga2 (1-D barcodes) ──
-    //
-    // Used when: BarcodeDetector is absent, constructor failed, or auto-fallback
-    // triggered after 20 consecutive empty native results.
-    //
-    // Frame capture: draw to our own canvas using offsetWidth/offsetHeight as
-    // dimension fallback for iOS Safari where videoWidth is always 0 on
-    // MediaStreams.  On Android Chrome, canvas drawImage from a camera
-    // MediaStream DOES produce valid pixel data (unlike DRM video).
-    // Clamp canvas to 1280×720 max.  Even if getUserMedia delivers a frame
-    // larger than requested (high-DPI phones sometimes ignore the max hint),
-    // drawImage scales the full frame down to fit — preserving the whole
-    // barcode in the canvas.  Keeping the canvas small is critical: a 4 K
-    // source fed to Quagga2 via toDataURL takes 1–3 s to encode on mobile.
-    const rawW = video.videoWidth  || video.offsetWidth  || 640;
-    const rawH = video.videoHeight || video.offsetHeight || 480;
-    const w = Math.min(rawW, 1280);
-    const h = Math.min(rawH,  720);
-    if (!Scan.decodeCanvas) Scan.decodeCanvas = document.createElement('canvas');
-    if (Scan.decodeCanvas.width !== w || Scan.decodeCanvas.height !== h) {
-      Scan.decodeCanvas.width  = w;
-      Scan.decodeCanvas.height = h;
-    }
-    const ctx = Scan.decodeCanvas.getContext('2d');
-    // drawImage with explicit destination size scales the full video frame
-    // (even if its intrinsic resolution is larger) down to w×h.
-    ctx.drawImage(video, 0, 0, w, h);
+  // Use the grabbed bitmap as the decode source; fall back to the video element
+  // if ImageCapture is unavailable or failed (e.g. older Chrome, Firefox).
+  const source = bitmap || video;
 
-    // ── 1. jsQR — synchronous, QR codes only ────────────────────────────────
-    if (typeof jsQR !== 'undefined') {
+  try {
+    if (Scan.cameraDetector) {
+      // ── Path A: BarcodeDetector ─────────────────────────────────────────────
+      // Pass the ImageBitmap when available — native API accepts both ImageBitmap
+      // and HTMLVideoElement.  The bitmap is always CPU-accessible, so the GPU
+      // frame-copy issue cannot occur.
+      let codes;
       try {
-        const px  = ctx.getImageData(0, 0, w, h);
-        const qr  = jsQR(px.data, w, h, { inversionAttempts: 'dontInvert' });
-        if (qr && Scan.cameraRunning) {
-          Scan._decoding = false;
-          onBarcodeFound(qr.data);
-          return;
+        codes = await Scan.cameraDetector.detect(source);
+      } catch (detErr) {
+        console.warn('[BarcodeDetector] detect() error:', detErr?.name, detErr?.message);
+        codes = [];
+      }
+      if (codes.length > 0 && Scan.cameraRunning) {
+        Scan._bdFailCount = 0;
+        onBarcodeFound(codes[0].rawValue);
+      } else {
+        // Track consecutive misses.  After 20 frames (~5 s) with no result,
+        // automatically switch to the software decoder.
+        Scan._bdFailCount++;
+        if (Scan._bdFailCount >= 20 && Scan.cameraRunning) {
+          console.warn('[BarcodeDetector] ' + Scan._bdFailCount +
+            ' consecutive empty results — switching to software decoder');
+          Scan.cameraDetector = null;
+          Scan._bdFailCount   = 0;
+          $('scan-cam-status').textContent =
+            '🔍 Switched to software decoder — keep barcode steady…';
         }
-      } catch (_) {}
-    }
+      }
 
-    // ── 2. Quagga2 — async, 1-D barcodes (Code128, Code39, EAN, UPC …) ──────
-    if (typeof Quagga !== 'undefined') {
-      Quagga.decodeSingle({
-        numOfWorkers: 0,   // run in main thread — no Web Worker needed
-        locate:       true,
-        decoder: {
-          readers: ['code_128_reader','ean_reader','upc_reader',
-                    'code_39_reader','codabar_reader','i2of5_reader','code_93_reader']
-        },
-        src: Scan.decodeCanvas.toDataURL('image/png')
-      }, result => {
-        Scan._decoding = false;
-        if (result && result.codeResult && Scan.cameraRunning) {
-          onBarcodeFound(result.codeResult.code);
-        }
-      });
     } else {
-      // No software decoder available at all
-      Scan._decoding = false;
+      // ── Path B: Software decoder — jsQR (QR) + Quagga2 (1-D) ──────────────
+      // Determine canvas dimensions from the bitmap (if grabbed) or video.
+      // iOS Safari reports videoWidth=0 on MediaStreams, so offsetWidth is the
+      // fallback.  Clamp to 1280×720: high-DPI phones can deliver frames larger
+      // than the getUserMedia max hint, and a 4 K source makes Quagga2's
+      // toDataURL call take 1–3 s per tick.
+      const rawW = bitmap ? bitmap.width  : (video.videoWidth  || video.offsetWidth  || 640);
+      const rawH = bitmap ? bitmap.height : (video.videoHeight || video.offsetHeight || 480);
+      const w = Math.min(rawW, 1280);
+      const h = Math.min(rawH,  720);
+
+      if (!Scan.decodeCanvas) Scan.decodeCanvas = document.createElement('canvas');
+      if (Scan.decodeCanvas.width !== w || Scan.decodeCanvas.height !== h) {
+        Scan.decodeCanvas.width  = w;
+        Scan.decodeCanvas.height = h;
+      }
+      const ctx = Scan.decodeCanvas.getContext('2d');
+      // Drawing from an ImageBitmap always produces valid pixels regardless of
+      // the GPU frame-copy issue.  Drawing from video is the old fallback path.
+      ctx.drawImage(source, 0, 0, w, h);
+
+      // ── 1. jsQR — synchronous, QR codes only ─────────────────────────────
+      if (typeof jsQR !== 'undefined') {
+        try {
+          const px = ctx.getImageData(0, 0, w, h);
+          const qr = jsQR(px.data, w, h, { inversionAttempts: 'dontInvert' });
+          if (qr && Scan.cameraRunning) { onBarcodeFound(qr.data); return; }
+        } catch (_) {}
+      }
+
+      // ── 2. Quagga2 — async, 1-D barcodes (Code128, Code39, EAN, UPC …) ────
+      if (typeof Quagga !== 'undefined') {
+        await new Promise(resolve => {
+          Quagga.decodeSingle({
+            numOfWorkers: 0,   // run in main thread — no Web Worker overhead
+            locate:       true,
+            decoder: {
+              readers: ['code_128_reader','ean_reader','upc_reader',
+                        'code_39_reader','codabar_reader','i2of5_reader','code_93_reader']
+            },
+            // JPEG at 0.85 quality is fast to encode on mobile and sufficient
+            // for barcode-width detail (barcodes don't need lossless fidelity).
+            src: Scan.decodeCanvas.toDataURL('image/jpeg', 0.85)
+          }, result => {
+            if (result && result.codeResult && Scan.cameraRunning) {
+              onBarcodeFound(result.codeResult.code);
+            }
+            resolve();
+          });
+        });
+      }
     }
+  } finally {
+    // Always release the ImageBitmap and the mutex, even if decode threw.
+    if (bitmap) { try { bitmap.close(); } catch (_) {} }
+    Scan._decoding = false;
   }
 }
 
@@ -3143,6 +3147,7 @@ function onBarcodeFound(val) {
 function stopCamera() {
   if (Scan.scanTimer)    { clearInterval(Scan.scanTimer); Scan.scanTimer = null; }
   if (Scan.cameraStream) { Scan.cameraStream.getTracks().forEach(t => t.stop()); Scan.cameraStream = null; }
+  Scan.imageCapture = null;
   Scan.decodeCanvas = null;
 
   const video = $('scan-video');
