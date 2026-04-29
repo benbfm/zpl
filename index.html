@@ -2671,6 +2671,7 @@ const Scan = {
   scanTimer:      null,  // setInterval handle for decode loop
   _decoding:      false, // mutex — prevents concurrent decode calls
   _tickCount:     0,     // frames attempted — shown in status so user can confirm loop is live
+  _bdFailCount:   0,     // consecutive BarcodeDetector empty results — triggers ZXing fallback
 };
 
 // ── Core lookup ────────────────────────────────────────────────
@@ -2885,7 +2886,7 @@ async function startCamera() {
     // No-op if autoplay already started; swallow any error (already playing).
     try { await video.play(); } catch (_) {}
 
-    // ── Step 4: wait for first frame to be available ─────────────────────────
+    // ── Step 4a: wait for readyState ≥ 2 (first frame data available) ──────────
     // We listen for canplay / loadedmetadata (more reliable than 'playing' on
     // iOS Safari). Bail out after 6 s and let the decode loop handle it.
     if (video.readyState < 2) {
@@ -2894,6 +2895,22 @@ async function startCamera() {
         video.addEventListener('loadedmetadata', resolve, { once: true });
         video.addEventListener('playing',        resolve, { once: true });
         setTimeout(resolve, 6000);
+      });
+    }
+
+    // ── Step 4b: wait for currentTime > 0 (at least one frame decoded) ──────────
+    // readyState ≥ 2 means the browser has frame *metadata*, but on Android Chrome
+    // the hardware camera pipeline may not have delivered the first actual pixel
+    // frame yet.  video.currentTime stays at 0 until the first frame is rendered.
+    // BarcodeDetector.detect() called on a currentTime=0 video returns empty
+    // results even though readyState reports "ready".  Poll for up to 2 s.
+    if (video.currentTime === 0) {
+      await new Promise(resolve => {
+        const deadline = Date.now() + 2000;
+        (function poll() {
+          if (video.currentTime > 0 || Date.now() >= deadline) return resolve();
+          requestAnimationFrame(poll);
+        })();
       });
     }
 
@@ -2915,9 +2932,14 @@ async function startCamera() {
       let formats = wantedFormats;
       try {
         const supported = await BarcodeDetector.getSupportedFormats();
-        if (supported && supported.length > 0)
-          formats = wantedFormats.filter(f => supported.includes(f));
-        if (formats.length === 0) formats = wantedFormats;  // fallback: try all
+        if (supported && supported.length > 0) {
+          // Case-insensitive comparison: some Android builds return "CODE_128" (uppercase)
+          // while the spec and our list use "code_128" (lowercase).  A direct .includes()
+          // would miss these, leaving formats empty and passing all formats to constructor.
+          const supportedLower = supported.map(s => s.toLowerCase());
+          formats = wantedFormats.filter(f => supportedLower.includes(f.toLowerCase()));
+        }
+        if (formats.length === 0) formats = wantedFormats;  // last-resort: try all
         console.log('[BarcodeDetector] supported formats on this device:', supported);
         console.log('[BarcodeDetector] using formats:', formats);
       } catch (_) {
@@ -3007,7 +3029,24 @@ function scanFrameTick() {
       .then(codes => {
         try {
           if (codes.length > 0 && Scan.cameraRunning) {
+            Scan._bdFailCount = 0;
             onBarcodeFound(codes[0].rawValue);
+          } else {
+            // BarcodeDetector returned empty — track consecutive misses.
+            // After 40 frames (~10 s) with no result, the native detector likely
+            // doesn't support the format being scanned (e.g. Code128 on some
+            // Android builds).  Automatically fall back to ZXing.js which supports
+            // a wider range of formats via a JavaScript decoder.
+            Scan._bdFailCount++;
+            if (Scan._bdFailCount >= 40 && typeof ZXing !== 'undefined' && Scan.cameraRunning) {
+              console.warn('[BarcodeDetector] ' + Scan._bdFailCount +
+                ' consecutive empty results — switching to ZXing fallback');
+              Scan.cameraDetector = null;
+              Scan.zxingReader    = new ZXing.BrowserMultiFormatReader();
+              Scan._bdFailCount   = 0;
+              $('scan-cam-status').textContent =
+                '🔍 Switched to software decoder — keep barcode steady…';
+            }
           }
         } finally {
           Scan._decoding = false;  // always release mutex, even if onBarcodeFound throws
@@ -3086,6 +3125,7 @@ function stopCamera() {
   Scan.cameraDetector  = null;
   Scan._decoding       = false;
   Scan._tickCount      = 0;
+  Scan._bdFailCount    = 0;
 }
 
 // Stop camera when leaving scan screen
